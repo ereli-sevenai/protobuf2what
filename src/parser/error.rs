@@ -112,8 +112,6 @@ where
     }
 }
 
-// ... rest of your parser implementation ...
-
 pub fn parse_proto_file(input: &str) -> ParseResult<ProtoFile> {
     let (remaining, tokens) = tokenize(input).map_err(|e| ParseError::LexerError(e.to_string()))?;
     
