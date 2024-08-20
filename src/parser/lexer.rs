@@ -45,6 +45,7 @@ pub enum Token<'a> {
     CloseBracket,
     LessThan,
     GreaterThan,
+    Required
 }
 
 fn parse_keyword(input: &str) -> IResult<&str, Token> {

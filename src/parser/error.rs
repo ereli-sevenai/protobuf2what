@@ -1,5 +1,5 @@
-use crate::parser::ast::ProtoFile;
-use crate::parser::lexer::{Token, tokenize};
+use crate::parser::lexer::Token;
+use std::error::Error;
 
 use std::fmt;
 use std::iter::Peekable;
@@ -24,6 +24,8 @@ pub enum ParseError {
     DuplicateDefinition(String),
     /// Unknown type referenced
     UnknownType(String),
+    /// Missing identifier
+    MissingIdentifier(String),
     /// Invalid field number
     InvalidFieldNumber(String),
     /// Generic error for other cases
@@ -42,6 +44,7 @@ impl fmt::Display for ParseError {
             ParseError::DuplicateDefinition(msg) => write!(f, "Duplicate definition: {}", msg),
             ParseError::UnknownType(msg) => write!(f, "Unknown type: {}", msg),
             ParseError::InvalidFieldNumber(msg) => write!(f, "Invalid field number: {}", msg),
+            ParseError::MissingIdentifier(msg) => write!(f, "Missing identifier: {}", msg),
             ParseError::Other(msg) => write!(f, "Error: {}", msg),
         }
     }
@@ -112,15 +115,15 @@ where
     }
 }
 
-pub fn parse_proto_file(input: &str) -> ParseResult<ProtoFile> {
-    let (remaining, tokens) = tokenize(input).map_err(|e| ParseError::LexerError(e.to_string()))?;
+pub fn parse_proto_file(input: &str) -> () { // FIXME () -> ParseResult<ProtoFile>
+    // let (remaining, tokens) = tokenize(input).map_err(|e| ParseError::LexerError(e.to_string()))?;
     
-    if !remaining.trim().is_empty() {
-        return Err(ParseError::IncompleteParser(format!("Unparsed input remaining: {}", remaining)));
-    }
+    // if !remaining.trim().is_empty() {
+    //     return Err(ParseError::IncompleteParser(format!("Unparsed input remaining: {}", remaining)));
+    // }
 
-    let mut token_iter = tokens.into_iter().peekable();
-    parse_proto(&mut token_iter)
+    // let mut token_iter = tokens.into_iter().peekable();
+    // parse_proto(&mut token_iter)
 }
 
 

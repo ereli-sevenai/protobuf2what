@@ -5,11 +5,27 @@ pub enum Syntax {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum OptionValue {
+    Identifier(String),
+    String(String),
+    Number(f64),
+    Boolean(bool),
+    List(Vec<OptionValue>),
+    Map(Vec<(OptionValue, OptionValue)>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProtoOption {
+    pub name: String,
+    pub value: OptionValue,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProtoFile {
     pub syntax: Syntax,
     pub package: Option<String>,
     pub imports: Vec<Import>,
-    pub options: Vec<Option_>,
+    pub options: Vec<ProtoOption>,
     pub messages: Vec<Message>,
     pub enums: Vec<Enum>,
     pub services: Vec<Service>,
@@ -29,29 +45,23 @@ pub enum ImportKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Option_ {
-    pub name: String,
-    pub value: Constant,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct Message {
     pub name: String,
     pub fields: Vec<Field>,
     pub oneofs: Vec<OneOf>,
     pub nested_messages: Vec<Message>,
     pub nested_enums: Vec<Enum>,
-    pub options: Vec<Option_>,
+    pub options: Vec<ProtoOption>,
     pub reserved: Vec<Reserved>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
     pub name: String,
-    pub number: i32,
+    pub number: i64,
     pub label: FieldLabel,
-    pub typ: FieldType,
-    pub options: Vec<Option_>,
+    pub typ: String,
+    pub options: Vec<ProtoOption>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -92,21 +102,21 @@ pub struct OneOf {
 pub struct Enum {
     pub name: String,
     pub values: Vec<EnumValue>,
-    pub options: Vec<Option_>,
+    pub options: Vec<ProtoOption>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumValue {
     pub name: String,
     pub number: i32,
-    pub options: Vec<Option_>,
+    pub options: Vec<ProtoOption>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Service {
     pub name: String,
     pub methods: Vec<Method>,
-    pub options: Vec<Option_>,
+    pub options: Vec<ProtoOption>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,7 +126,7 @@ pub struct Method {
     pub output_type: String,
     pub client_streaming: bool,
     pub server_streaming: bool,
-    pub options: Vec<Option_>,
+    pub options: Vec<ProtoOption>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -140,27 +150,10 @@ pub enum Constant {
     Identifier(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProtoOption {
-    pub name: String,
-    pub value: OptionValue,
-}
-
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum OptionValue {
-    Identifier(String),
-    String(String),
-    Number(f64),
-    Boolean(bool),
-    List(Vec<OptionValue>),
-    Map(Vec<(OptionValue, OptionValue)>),
-}
-
 impl ProtoFile {
     pub fn new() -> Self {
         ProtoFile {
-            syntax: Syntax::Proto3,  // Default to Proto3
+            syntax: Syntax::Proto3, // Default to Proto3
             package: None,
             imports: Vec::new(),
             options: Vec::new(),
@@ -206,14 +199,10 @@ impl Service {
 }
 
 impl ProtoOption {
-    pub fn new(name: String) -> Self {
-        ProtoOption {
-            name,
-            value: Vec::new(),
-        }
+    pub fn new(name: String, value: OptionValue) -> Self {
+        ProtoOption { name, value }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -224,7 +213,7 @@ mod tests {
         let mut proto_file = ProtoFile::new();
         proto_file.syntax = Syntax::Proto3;
         proto_file.package = Some("example.package".to_string());
-        
+
         let import = Import {
             path: "google/protobuf/any.proto".to_string(),
             kind: ImportKind::Default,
