@@ -5,6 +5,13 @@ pub enum Syntax {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Reserved {
+    Number(i32),
+    Range(i32, i32),
+    FieldName(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum OptionValue {
     Identifier(String),
     String(String),
@@ -127,12 +134,6 @@ pub struct Method {
     pub client_streaming: bool,
     pub server_streaming: bool,
     pub options: Vec<ProtoOption>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Reserved {
-    Ranges(Vec<ReservedRange>),
-    FieldNames(Vec<String>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

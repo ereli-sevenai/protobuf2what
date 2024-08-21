@@ -1,12 +1,8 @@
-use protobuf_zod_converter::parser::parse_proto_file;
-use crate::generator::{generate_zod_schema, GeneratorConfig};
+use protobuf_to_zod::parser::parse_proto_file;
 
 fn main() {
-    let proto_file = parse_proto_file("example.proto").expect("Failed to parse Protobuf file");
-    let config = GeneratorConfig::default();
+    let file_path = concat!(env!("CARGO_MANIFEST_DIR"), "/files/simple.proto");
+    let _proto_file = parse_proto_file(file_path).expect("Failed to parse Protobuf file");
 
-    match generate_zod_schema(&proto_file, config) {
-        Ok(schema) => println!("Generated schema:\n{}", schema),
-        Err(e) => eprintln!("Generation failed: {:?}", e),
-    }
+    println!("Success!")
 }

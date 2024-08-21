@@ -1,0 +1,14 @@
+syntax = "proto3";
+package simple;
+
+message Person {
+    string name = 1;
+    int32 age = 2;
+    repeated string hobbies = 3;
+}
+
+enum Gender {
+    UNKNOWN = 0;
+    MALE = 1;
+    FEMALE = 2;
+}

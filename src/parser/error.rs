@@ -5,7 +5,6 @@ use std::fmt;
 use std::iter::Peekable;
 
 /// Represents all possible errors that can occur during parsing
-/// Represents all possible errors that can occur during parsing
 #[derive(Debug)]
 pub enum ParseError {
     /// Error occurred during lexical analysis
@@ -26,6 +25,8 @@ pub enum ParseError {
     UnknownType(String),
     /// Missing identifier
     MissingIdentifier(String),
+    /// Invalid number range
+    InvalidRange(i32, i32),
     /// Invalid field number
     InvalidFieldNumber(String),
     /// Generic error for other cases
@@ -45,11 +46,13 @@ impl fmt::Display for ParseError {
             ParseError::UnknownType(msg) => write!(f, "Unknown type: {}", msg),
             ParseError::InvalidFieldNumber(msg) => write!(f, "Invalid field number: {}", msg),
             ParseError::MissingIdentifier(msg) => write!(f, "Missing identifier: {}", msg),
+            ParseError::InvalidRange(start, end) => {
+                write!(f, "Invalid range: starg={}, end={}", start, end)
+            }
             ParseError::Other(msg) => write!(f, "Error: {}", msg),
         }
     }
 }
-
 
 impl Error for ParseError {}
 
@@ -99,7 +102,10 @@ where
 {
     match tokens.next() {
         Some(ref token) if token == expected => Ok(()),
-        Some(token) => Err(ParseError::UnexpectedToken(format!("Expected {:?}, found {:?}", expected, token))),
+        Some(token) => Err(ParseError::UnexpectedToken(format!(
+            "Expected {:?}, found {:?}",
+            expected, token
+        ))),
         None => Err(ParseError::UnexpectedEndOfInput),
     }
 }
@@ -110,24 +116,14 @@ where
 {
     match tokens.next() {
         Some(Token::Identifier(name)) => Ok(name.to_string()),
-        Some(token) => Err(ParseError::UnexpectedToken(format!("Expected identifier, found {:?}", token))),
+        Some(token) => Err(ParseError::UnexpectedToken(format!(
+            "Expected identifier, found {:?}",
+            token
+        ))),
         None => Err(ParseError::UnexpectedEndOfInput),
     }
 }
 
-pub fn parse_proto_file(input: &str) -> () { // FIXME () -> ParseResult<ProtoFile>
-    // let (remaining, tokens) = tokenize(input).map_err(|e| ParseError::LexerError(e.to_string()))?;
-    
-    // if !remaining.trim().is_empty() {
-    //     return Err(ParseError::IncompleteParser(format!("Unparsed input remaining: {}", remaining)));
-    // }
-
-    // let mut token_iter = tokens.into_iter().peekable();
-    // parse_proto(&mut token_iter)
-}
-
-
-#[cfg(test)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,7 +140,10 @@ mod tests {
     #[test]
     fn test_location_error() {
         let error = ParseError::InvalidSyntax("Missing semicolon".to_string());
-        let location = SourceLocation { line: 10, column: 15 };
+        let location = SourceLocation {
+            line: 10,
+            column: 15,
+        };
         let loc_error = error_at_location(error, location);
         assert_eq!(
             format!("{}", loc_error),

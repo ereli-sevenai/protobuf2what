@@ -7,10 +7,12 @@ pub mod ast;
 pub mod error;
 mod lexer;
 
+use crate::parser::ast::Reserved::{FieldName, Number};
 use crate::parser::ast::{
-    Enum, EnumValue, Field, FieldLabel, FieldType, Import, ImportKind, Message, Method,
-    OptionValue, ProtoFile, ProtoOption, Service, Syntax,
+    Enum, EnumValue, Field, FieldLabel, Import, ImportKind, Message, Method, OptionValue,
+    ProtoFile, ProtoOption, Service, Syntax,
 };
+
 pub use error::{ParseError, ParseResult};
 pub use lexer::{tokenize, Token};
 
@@ -29,6 +31,7 @@ pub fn parse_proto_file(input: &str) -> Result<ProtoFile, ParseError> {
     let (remaining, tokens) = tokenize(input).map_err(|e| ParseError::LexerError(e.to_string()))?;
 
     if !remaining.trim().is_empty() {
+        println!("Unparsed input: '{}'", remaining);
         return Err(ParseError::IncompleteParser(format!(
             "Unparsed input remaining: {}",
             remaining
@@ -46,6 +49,7 @@ where
     let mut proto_file = ProtoFile::new();
 
     while let Some(token) = tokens.peek() {
+        println!("Processing token: {:?}", token);
         match token {
             Token::Syntax => parse_syntax(tokens, &mut proto_file)?,
             Token::Package => parse_package(tokens, &mut proto_file)?,
@@ -289,7 +293,6 @@ where
         _ => FieldLabel::Optional,
     };
 
-    let typ = "FieldType"; // Simplified parse_field_type
     let name = match tokens.next() {
         Some(Token::Identifier(name)) => name.to_string(), // Convert &str to String
         _ => {
@@ -318,45 +321,45 @@ where
         name,
         number,
         label,
-        typ: typ.to_string(),
+        typ: "FieldType".to_string(),
         options: Vec::new(), // TODO: Parse field options
     })
 }
 
-fn parse_field_type<'a, I>(tokens: &mut Peekable<I>) -> Result<FieldType, ParseError>
-where
-    I: Iterator<Item = Token<'a>>,
-{
-    match tokens.next() {
-        Some(Token::Identifier(typ)) => match typ {
-            "double" => Ok(FieldType::Double),
-            "float" => Ok(FieldType::Float),
-            "int32" => Ok(FieldType::Int32),
-            "int64" => Ok(FieldType::Int64),
-            "uint32" => Ok(FieldType::UInt32),
-            "uint64" => Ok(FieldType::UInt64),
-            "sint32" => Ok(FieldType::SInt32),
-            "sint64" => Ok(FieldType::SInt64),
-            "fixed32" => Ok(FieldType::Fixed32),
-            "fixed64" => Ok(FieldType::Fixed64),
-            "sfixed32" => Ok(FieldType::SFixed32),
-            "sfixed64" => Ok(FieldType::SFixed64),
-            "bool" => Ok(FieldType::Bool),
-            "string" => Ok(FieldType::String),
-            "bytes" => Ok(FieldType::Bytes),
-            _ => Ok(FieldType::MessageOrEnum(typ.to_string())),
-        },
-        Some(Token::Map) => {
-            expect_token(tokens, &Token::LessThan)?;
-            let key_type = parse_field_type(tokens)?;
-            expect_token(tokens, &Token::Comma)?;
-            let value_type = parse_field_type(tokens)?;
-            expect_token(tokens, &Token::GreaterThan)?;
-            Ok(FieldType::Map(Box::new(key_type), Box::new(value_type)))
-        }
-        _ => Err(ParseError::ExpectedToken("field type".to_string())),
-    }
-}
+// fn parse_field_type<'a, I>(tokens: &mut Peekable<I>) -> Result<FieldType, ParseError>
+// where
+//     I: Iterator<Item = Token<'a>>,
+// {
+//     match tokens.next() {
+//         Some(Token::Identifier(typ)) => match typ {
+//             "double" => Ok(FieldType::Double),
+//             "float" => Ok(FieldType::Float),
+//             "int32" => Ok(FieldType::Int32),
+//             "int64" => Ok(FieldType::Int64),
+//             "uint32" => Ok(FieldType::UInt32),
+//             "uint64" => Ok(FieldType::UInt64),
+//             "sint32" => Ok(FieldType::SInt32),
+//             "sint64" => Ok(FieldType::SInt64),
+//             "fixed32" => Ok(FieldType::Fixed32),
+//             "fixed64" => Ok(FieldType::Fixed64),
+//             "sfixed32" => Ok(FieldType::SFixed32),
+//             "sfixed64" => Ok(FieldType::SFixed64),
+//             "bool" => Ok(FieldType::Bool),
+//             "string" => Ok(FieldType::String),
+//             "bytes" => Ok(FieldType::Bytes),
+//             _ => Ok(FieldType::MessageOrEnum(typ.to_string())),
+//         },
+//         Some(Token::Map) => {
+//             expect_token(tokens, &Token::LessThan)?;
+//             let key_type = parse_field_type(tokens)?;
+//             expect_token(tokens, &Token::Comma)?;
+//             let value_type = parse_field_type(tokens)?;
+//             expect_token(tokens, &Token::GreaterThan)?;
+//             Ok(FieldType::Map(Box::new(key_type), Box::new(value_type)))
+//         }
+//         _ => Err(ParseError::ExpectedToken("field type".to_string())),
+//     }
+// }
 
 fn parse_enum_value<'a, I>(tokens: &mut Peekable<I>) -> Result<EnumValue, ParseError>
 where
@@ -417,6 +420,43 @@ where
     Ok(method)
 }
 
+fn parse_reserved<'a, I>(
+    tokens: &mut Peekable<I>,
+    reserved: &mut Vec<crate::parser::ast::Reserved>,
+) -> Result<(), ParseError>
+where
+    I: Iterator<Item = Token<'a>>,
+{
+    tokens.next().ok_or(ParseError::UnexpectedEndOfInput)?; // Consume 'reserved' token
+
+    loop {
+        match tokens.next() {
+            Some(Token::IntLiteral(_)) => {
+                let start = parse_integer(tokens)?;
+                if let Some(Token::To) = tokens.peek() {
+                    tokens.next(); // Consume 'to' token
+                    let end = parse_integer(tokens)?;
+                    if start <= end {
+                        reserved.push(crate::parser::ast::Reserved::Range(start, end));
+                    } else {
+                        return Err(ParseError::InvalidRange(start, end));
+                    }
+                } else {
+                    reserved.push(Number(start));
+                }
+            }
+            Some(Token::StringLiteral(name)) => {
+                reserved.push(FieldName(name.to_string()));
+            }
+            Some(Token::Semicolon) => break,
+            Some(Token::Comma) => continue,
+            Some(token) => return Err(ParseError::UnexpectedToken(format!("{:?}", token))),
+            None => return Err(ParseError::UnexpectedEndOfInput),
+        }
+    }
+    Ok(())
+}
+
 fn expect_token<'a, I>(tokens: &mut Peekable<I>, expected: &Token) -> Result<(), ParseError>
 where
     I: Iterator<Item = Token<'a>>,
@@ -475,16 +515,6 @@ where
     }
 }
 
-// TODO: Implement parse_reserved function
-fn parse_reserved<'a, I>(
-    _tokens: &mut Peekable<I>,
-    _reserved: &mut Vec<crate::parser::ast::Reserved>,
-) -> Result<(), ParseError>
-where
-    I: Iterator<Item = Token<'a>>,
-{
-    todo!("Implement parse_reserved")
-}
 #[cfg(test)]
 mod tests {
     use super::*;
