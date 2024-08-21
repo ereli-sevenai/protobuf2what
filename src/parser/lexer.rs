@@ -1,17 +1,14 @@
 use nom::{
     branch::alt,
     bytes::complete::{tag, take_while},
-    character::complete::{alpha1, alphanumeric1, char, digit1, multispace0, multispace1},
+    character::complete::{alpha1, alphanumeric1, char, digit1, multispace0},
     combinator::{map, map_res, opt, recognize},
-    error::Error,
     multi::many0,
     sequence::{delimited, pair, preceded},
     IResult,
 };
 
 use super::ParseError;
-
-type ParseResult<'a, T> = IResult<&'a str, T, Error<&'a str>>;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token<'a> {
@@ -162,14 +159,16 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
     )(input)
 }
 
-fn parse_whitespace(input: &str) -> IResult<&str, Token> {
-    map(multispace1, |_| Token::Whitespace)(input) // Add a new Token variant for whitespace
-}
-
 pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
-    many0(alt((parse_token, parse_comment, parse_whitespace)))(input)
-        .map(|(_, tokens)| tokens)
-        .map_err(ParseError::from)
+    many0(preceded(
+        multispace0,
+        alt((
+            map(parse_token, Some),
+            map(recognize(parse_comment), |_| None),
+        )),
+    ))(input)
+    .map(|(_, tokens)| tokens.into_iter().flatten().collect())
+    .map_err(ParseError::from)
 }
 
 #[cfg(test)]

@@ -26,6 +26,8 @@ pub enum ParseError {
     InvalidRange(i32, i32),
     /// Invalid field number
     InvalidFieldNumber(String),
+    // Tokenization error
+    NomError(String),
     /// Generic error for other cases
     Other(String),
 }
@@ -43,6 +45,7 @@ impl fmt::Display for ParseError {
             ParseError::UnknownType(msg) => write!(f, "Unknown type: {}", msg),
             ParseError::InvalidFieldNumber(msg) => write!(f, "Invalid field number: {}", msg),
             ParseError::MissingIdentifier(msg) => write!(f, "Missing identifier: {}", msg),
+            ParseError::NomError(msg) => write!(f, "Parsing error: {}", msg),
             ParseError::InvalidRange(start, end) => {
                 write!(f, "Invalid range: starg={}, end={}", start, end)
             }
@@ -51,11 +54,12 @@ impl fmt::Display for ParseError {
     }
 }
 
-impl From<nom::Err<nom::error::Error<&str>>> for ParseError {
-    fn from(error: nom::Err<nom::error::Error<&str>>) -> Self {
-        ParseError {
-            message: error.to_string(),
-        }
+impl<I> From<nom::Err<nom::error::Error<I>>> for ParseError
+where
+    I: std::fmt::Debug,
+{
+    fn from(error: nom::Err<nom::error::Error<I>>) -> Self {
+        ParseError::NomError(format!("{:?}", error))
     }
 }
 
