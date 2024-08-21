@@ -1,12 +1,17 @@
 use nom::{
-    IResult,
     branch::alt,
     bytes::complete::{tag, take_while},
     character::complete::{alpha1, alphanumeric1, char, digit1, multispace0, multispace1},
-    combinator::{map, opt, recognize},
+    combinator::{map, map_res, opt, recognize},
+    error::Error,
     multi::many0,
     sequence::{delimited, pair, preceded},
+    IResult,
 };
+
+use super::ParseError;
+
+type ParseResult<'a, T> = IResult<&'a str, T, Error<&'a str>>;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token<'a> {
@@ -45,7 +50,9 @@ pub enum Token<'a> {
     CloseBracket,
     LessThan,
     GreaterThan,
-    Required
+    Required,
+    Comment,
+    Whitespace,
 }
 
 fn parse_keyword(input: &str) -> IResult<&str, Token> {
@@ -84,23 +91,15 @@ fn parse_identifier(input: &str) -> IResult<&str, Token> {
 
 fn parse_string_literal(input: &str) -> IResult<&str, Token> {
     map(
-        delimited(
-            char('"'),
-            take_while(|c| c != '"'),
-            char('"'),
-        ),
+        delimited(char('"'), take_while(|c| c != '"'), char('"')),
         Token::StringLiteral,
     )(input)
 }
 
 fn parse_int_literal(input: &str) -> IResult<&str, Token> {
-    map(
-        recognize(pair(
-            opt(char('-')),
-            digit1,
-        )),
-        |s: &str| Token::IntLiteral(s.parse().unwrap()),
-    )(input)
+    map_res(recognize(pair(opt(char('-')), digit1)), |s: &str| {
+        s.parse().map(Token::IntLiteral)
+    })(input)
 }
 
 fn parse_float_literal(input: &str) -> IResult<&str, Token> {
@@ -136,13 +135,7 @@ fn parse_symbol(input: &str) -> IResult<&str, Token> {
 fn parse_comment(input: &str) -> IResult<&str, ()> {
     alt((
         // Single-line comment
-        map(
-            pair(
-                tag("//"),
-                take_while(|c| c != '\n'),
-            ),
-            |_| (),
-        ),
+        map(pair(tag("//"), take_while(|c| c != '\n')), |_| ()),
         // Multi-line comment
         map(
             delimited(
@@ -169,14 +162,14 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
     )(input)
 }
 
-pub fn tokenize(input: &str) -> IResult<&str, Vec<Token>> {
-    many0(
-        alt((
-            parse_token,
-            map(parse_comment, |_| unreachable!()),
-            map(multispace1, |_| unreachable!()),
-        )),
-    )(input)
+fn parse_whitespace(input: &str) -> IResult<&str, Token> {
+    map(multispace1, |_| Token::Whitespace)(input) // Add a new Token variant for whitespace
+}
+
+pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
+    many0(alt((parse_token, parse_comment, parse_whitespace)))(input)
+        .map(|(_, tokens)| tokens)
+        .map_err(ParseError::from)
 }
 
 #[cfg(test)]
@@ -187,7 +180,7 @@ mod tests {
     fn test_tokenize() {
         let input = r#"
             syntax = "proto3";
-            
+
             message Person {
                 string name = 1;
                 int32 age = 2;

@@ -28,15 +28,15 @@ use std::iter::Peekable;
 ///
 /// * `Result<ProtoFile, ParseError>` - The parsed AST or an error if parsing failed
 pub fn parse_proto_file(input: &str) -> Result<ProtoFile, ParseError> {
-    let (remaining, tokens) = tokenize(input).map_err(|e| ParseError::LexerError(e.to_string()))?;
+    let tokens = tokenize(input).map_err(|e| e)?;
 
-    if !remaining.trim().is_empty() {
-        println!("Unparsed input: '{}'", remaining);
-        return Err(ParseError::IncompleteParser(format!(
-            "Unparsed input remaining: {}",
-            remaining
-        )));
-    }
+    // if !remaining.trim().is_empty() {
+    //     println!("Unparsed input: '{}'", remaining);
+    //     return Err(ParseError::IncompleteParser(format!(
+    //         "Unparsed input remaining: {}",
+    //         remaining
+    //     )));
+    // }
 
     let mut token_iter = tokens.into_iter().peekable();
     parse_proto(&mut token_iter)

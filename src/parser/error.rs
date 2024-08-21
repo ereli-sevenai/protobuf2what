@@ -1,5 +1,4 @@
 use std::error::Error;
-
 use std::fmt;
 
 /// Represents all possible errors that can occur during parsing
@@ -34,7 +33,7 @@ pub enum ParseError {
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ParseError::LexerError(msg) => write!(f, "Lexer error: {}", msg),
+            ParseError::LexerError(msg) => write!(f, "Lexer error: {:?}", msg),
             ParseError::UnexpectedToken(msg) => write!(f, "Unexpected token: {}", msg),
             ParseError::ExpectedToken(msg) => write!(f, "Expected token: {}", msg),
             ParseError::InvalidSyntax(msg) => write!(f, "Invalid syntax: {}", msg),
@@ -48,6 +47,14 @@ impl fmt::Display for ParseError {
                 write!(f, "Invalid range: starg={}, end={}", start, end)
             }
             ParseError::Other(msg) => write!(f, "Error: {}", msg),
+        }
+    }
+}
+
+impl From<nom::Err<nom::error::Error<&str>>> for ParseError {
+    fn from(error: nom::Err<nom::error::Error<&str>>) -> Self {
+        ParseError {
+            message: error.to_string(),
         }
     }
 }
