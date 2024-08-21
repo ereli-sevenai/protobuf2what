@@ -1,8 +1,6 @@
-use crate::parser::lexer::Token;
 use std::error::Error;
 
 use std::fmt;
-use std::iter::Peekable;
 
 /// Represents all possible errors that can occur during parsing
 #[derive(Debug)]
@@ -96,33 +94,33 @@ pub fn error_at_location(error: ParseError, location: SourceLocation) -> Locatio
     LocationError { error, location }
 }
 
-fn expect_token<'a, I>(tokens: &mut Peekable<I>, expected: &Token) -> ParseResult<()>
-where
-    I: Iterator<Item = Token<'a>>,
-{
-    match tokens.next() {
-        Some(ref token) if token == expected => Ok(()),
-        Some(token) => Err(ParseError::UnexpectedToken(format!(
-            "Expected {:?}, found {:?}",
-            expected, token
-        ))),
-        None => Err(ParseError::UnexpectedEndOfInput),
-    }
-}
+// fn expect_token<'a, I>(tokens: &mut Peekable<I>, expected: &Token) -> ParseResult<()>
+// where
+//     I: Iterator<Item = Token<'a>>,
+// {
+//     match tokens.next() {
+//         Some(ref token) if token == expected => Ok(()),
+//         Some(token) => Err(ParseError::UnexpectedToken(format!(
+//             "Expected {:?}, found {:?}",
+//             expected, token
+//         ))),
+//         None => Err(ParseError::UnexpectedEndOfInput),
+//     }
+// }
 
-fn expect_identifier<'a, I>(tokens: &mut Peekable<I>) -> ParseResult<String>
-where
-    I: Iterator<Item = Token<'a>>,
-{
-    match tokens.next() {
-        Some(Token::Identifier(name)) => Ok(name.to_string()),
-        Some(token) => Err(ParseError::UnexpectedToken(format!(
-            "Expected identifier, found {:?}",
-            token
-        ))),
-        None => Err(ParseError::UnexpectedEndOfInput),
-    }
-}
+// fn expect_identifier<'a, I>(tokens: &mut Peekable<I>) -> ParseResult<String>
+// where
+//     I: Iterator<Item = Token<'a>>,
+// {
+//     match tokens.next() {
+//         Some(Token::Identifier(name)) => Ok(name.to_string()),
+//         Some(token) => Err(ParseError::UnexpectedToken(format!(
+//             "Expected identifier, found {:?}",
+//             token
+//         ))),
+//         None => Err(ParseError::UnexpectedEndOfInput),
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

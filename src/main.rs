@@ -1,8 +1,11 @@
 use protobuf_to_zod::parser::parse_proto_file;
+use std::fs;
 
 fn main() {
-    let file_path = concat!(env!("CARGO_MANIFEST_DIR"), "/files/simple.proto");
-    let _proto_file = parse_proto_file(file_path).expect("Failed to parse Protobuf file");
+    let proto_content =
+        fs::read_to_string("../files/simple.proto").expect("Failed to read the proto file");
 
-    println!("Success!")
+    let _proto_file = parse_proto_file(&proto_content).expect("Failed to parse Protobuf file");
+
+    println!("Success!");
 }
