@@ -226,14 +226,14 @@ mod tests {
             name: "name".to_string(),
             number: 1,
             label: FieldLabel::Optional,
-            typ: FieldType::String,
+            typ: String::new(),
             options: Vec::new(),
         });
         message.fields.push(Field {
             name: "age".to_string(),
             number: 2,
             label: FieldLabel::Optional,
-            typ: FieldType::Int32,
+            typ: String::new(),
             options: Vec::new(),
         });
         proto_file.messages.push(message);

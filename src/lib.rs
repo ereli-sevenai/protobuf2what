@@ -85,7 +85,7 @@ pub fn convert_proto_to_zod<P: AsRef<Path>>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::parser::parse_proto_file;
 
     #[test]
     fn test_convert_proto_to_zod() {
@@ -96,11 +96,6 @@ mod tests {
                 int32 age = 2;
             }
         "#;
-        let proto_file = parse_proto_file(input).unwrap();
-        // let config = ZodGeneratorConfig::default();
-        // let zod_schema = generate_zod_schema(&proto_file, config).unwrap();
-        // assert!(zod_schema.contains("z.object"));
-        // assert!(zod_schema.contains("name: z.string()"));
-        // assert!(zod_schema.contains("age: z.number()"));
+        let _proto_file = parse_proto_file(input).unwrap();
     }
 }
