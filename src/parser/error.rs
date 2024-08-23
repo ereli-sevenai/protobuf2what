@@ -1,65 +1,113 @@
 use std::error::Error;
 use std::fmt;
 
+#[derive(Debug, Clone, Copy)]
+pub struct Location {
+    pub line: usize,
+    pub column: usize,
+}
+
+impl Location {
+    pub fn new(line: usize, column: usize) -> Self {
+        Location { line, column }
+    }
+}
+
 /// Represents all possible errors that can occur during parsing
 #[derive(Debug)]
 pub enum ParseError {
     /// Error occurred during lexical analysis
-    LexerError(String),
+    LexerError(String, Location),
     /// Unexpected token encountered
-    UnexpectedToken(String),
+    UnexpectedToken(String, Location),
     /// Expected token not found
-    ExpectedToken(String),
+    ExpectedToken(String, Location),
     /// Invalid syntax
-    InvalidSyntax(String),
+    InvalidSyntax(String, Location),
     /// Unexpected end of input
-    UnexpectedEndOfInput,
+    UnexpectedEndOfInput(Location),
     /// Parser couldn't process entire input
-    IncompleteParser(String),
+    IncompleteParser(String, Location),
     /// Duplicate definition
-    DuplicateDefinition(String),
+    DuplicateDefinition(String, Location),
     /// Unknown type referenced
-    UnknownType(String),
+    UnknownType(String, Location),
     /// Missing identifier
-    MissingIdentifier(String),
+    MissingIdentifier(String, Location),
     /// Invalid number range
-    InvalidRange(i32, i32),
+    InvalidRange(i32, i32, Location),
     /// Invalid field number
-    InvalidFieldNumber(String),
-    // Tokenization error
-    NomError(String),
+    InvalidFieldNumber(String, Location),
+    /// Tokenization error
+    NomError(String, Location),
     /// Generic error for other cases
-    Other(String),
+    Other(String, Location),
 }
 
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl ParseError {
+    pub fn location(&self) -> Location {
         match self {
-            ParseError::LexerError(msg) => write!(f, "Lexer error: {:?}", msg),
-            ParseError::UnexpectedToken(msg) => write!(f, "Unexpected token: {}", msg),
-            ParseError::ExpectedToken(msg) => write!(f, "Expected token: {}", msg),
-            ParseError::InvalidSyntax(msg) => write!(f, "Invalid syntax: {}", msg),
-            ParseError::UnexpectedEndOfInput => write!(f, "Unexpected end of input"),
-            ParseError::IncompleteParser(msg) => write!(f, "Incomplete parsing: {}", msg),
-            ParseError::DuplicateDefinition(msg) => write!(f, "Duplicate definition: {}", msg),
-            ParseError::UnknownType(msg) => write!(f, "Unknown type: {}", msg),
-            ParseError::InvalidFieldNumber(msg) => write!(f, "Invalid field number: {}", msg),
-            ParseError::MissingIdentifier(msg) => write!(f, "Missing identifier: {}", msg),
-            ParseError::NomError(msg) => write!(f, "Parsing error: {}", msg),
-            ParseError::InvalidRange(start, end) => {
-                write!(f, "Invalid range: starg={}, end={}", start, end)
+            ParseError::LexerError(_, loc) => *loc,
+            ParseError::UnexpectedToken(_, loc) => *loc,
+            ParseError::ExpectedToken(_, loc) => *loc,
+            ParseError::InvalidSyntax(_, loc) => *loc,
+            ParseError::UnexpectedEndOfInput(loc) => *loc,
+            ParseError::IncompleteParser(_, loc) => *loc,
+            ParseError::DuplicateDefinition(_, loc) => *loc,
+            ParseError::UnknownType(_, loc) => *loc,
+            ParseError::MissingIdentifier(_, loc) => *loc,
+            ParseError::InvalidRange(_, _, loc) => *loc,
+            ParseError::InvalidFieldNumber(_, loc) => *loc,
+            ParseError::NomError(_, loc) => *loc,
+            ParseError::Other(_, loc) => *loc,
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            ParseError::LexerError(msg, _) => format!("Lexer error: {}", msg),
+            ParseError::UnexpectedToken(token, _) => format!("Unexpected token: {}", token),
+            ParseError::ExpectedToken(token, _) => format!("Expected token: {}", token),
+            ParseError::InvalidSyntax(msg, _) => format!("Invalid syntax: {}", msg),
+            ParseError::UnexpectedEndOfInput(_) => "Unexpected end of input".to_string(),
+            ParseError::IncompleteParser(msg, _) => format!("Incomplete parser: {}", msg),
+            ParseError::DuplicateDefinition(name, _) => format!("Duplicate definition: {}", name),
+            ParseError::UnknownType(type_name, _) => format!("Unknown type: {}", type_name),
+            ParseError::MissingIdentifier(msg, _) => format!("Missing identifier: {}", msg),
+            ParseError::InvalidRange(start, end, _) => {
+                format!("Invalid range: {} to {}", start, end)
             }
-            ParseError::Other(msg) => write!(f, "Error: {}", msg),
+            ParseError::InvalidFieldNumber(msg, _) => format!("Invalid field number: {}", msg),
+            ParseError::NomError(msg, _) => format!("Nom error: {}", msg),
+            ParseError::Other(msg, _) => format!("Other error: {}", msg),
         }
     }
 }
 
-impl<I> From<nom::Err<nom::error::Error<I>>> for ParseError
-where
-    I: std::fmt::Debug,
-{
-    fn from(error: nom::Err<nom::error::Error<I>>) -> Self {
-        ParseError::NomError(format!("{:?}", error))
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let loc = self.location();
+        write!(
+            f,
+            "Error at line {}, column {}: {}",
+            loc.line,
+            loc.column,
+            self.message()
+        )
+    }
+}
+
+impl From<nom::Err<nom::error::Error<&str>>> for ParseError {
+    fn from(error: nom::Err<nom::error::Error<&str>>) -> Self {
+        match error {
+            nom::Err::Incomplete(_) => {
+                ParseError::IncompleteParser("Incomplete input".to_string(), Location::new(0, 0))
+            }
+            nom::Err::Error(e) | nom::Err::Failure(e) => ParseError::NomError(
+                format!("Failed to parse token: {:?}", e.code),
+                Location::new(0, 0),
+            ),
+        }
     }
 }
 
@@ -104,34 +152,6 @@ impl Error for LocationError {
 pub fn error_at_location(error: ParseError, location: SourceLocation) -> LocationError {
     LocationError { error, location }
 }
-
-// fn expect_token<'a, I>(tokens: &mut Peekable<I>, expected: &Token) -> ParseResult<()>
-// where
-//     I: Iterator<Item = Token<'a>>,
-// {
-//     match tokens.next() {
-//         Some(ref token) if token == expected => Ok(()),
-//         Some(token) => Err(ParseError::UnexpectedToken(format!(
-//             "Expected {:?}, found {:?}",
-//             expected, token
-//         ))),
-//         None => Err(ParseError::UnexpectedEndOfInput),
-//     }
-// }
-
-// fn expect_identifier<'a, I>(tokens: &mut Peekable<I>) -> ParseResult<String>
-// where
-//     I: Iterator<Item = Token<'a>>,
-// {
-//     match tokens.next() {
-//         Some(Token::Identifier(name)) => Ok(name.to_string()),
-//         Some(token) => Err(ParseError::UnexpectedToken(format!(
-//             "Expected identifier, found {:?}",
-//             token
-//         ))),
-//         None => Err(ParseError::UnexpectedEndOfInput),
-//     }
-// }
 
 #[cfg(test)]
 mod tests {

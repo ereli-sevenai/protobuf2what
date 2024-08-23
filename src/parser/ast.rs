@@ -67,7 +67,7 @@ pub struct Field {
     pub name: String,
     pub number: i64,
     pub label: FieldLabel,
-    pub typ: String,
+    pub typ: FieldType,
     pub options: Vec<ProtoOption>,
 }
 
@@ -99,6 +99,14 @@ pub enum FieldType {
     Map(Box<FieldType>, Box<FieldType>),
 }
 
+pub enum FieldOptionValue {
+    String(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Identifier(String), // For enum values or custom identifiers
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct OneOf {
     pub name: String,
@@ -109,14 +117,35 @@ pub struct OneOf {
 pub struct Enum {
     pub name: String,
     pub values: Vec<EnumValue>,
-    pub options: Vec<ProtoOption>,
+    pub options: Vec<EnumValueOption>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumValue {
     pub name: String,
     pub number: i32,
-    pub options: Vec<ProtoOption>,
+    pub options: Vec<EnumValueOption>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumValueOption {
+    pub name: String,
+    pub value: EnumValueOptionValue,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnumValueOptionValue {
+    String(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Identifier(String), // For referencing other enum values or custom identifiers
+}
+
+impl EnumValueOption {
+    pub fn new(name: String, value: EnumValueOptionValue) -> Self {
+        EnumValueOption { name, value }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -205,6 +234,14 @@ impl ProtoOption {
     }
 }
 
+// TODO: Add support for 'extend' keyword
+// TODO: Add support for 'extensions' keyword (deprecated in proto3)
+// TODO: Add support for 'Any' type
+// TODO: Add support for 'Timestamp' type
+// TODO: Add support for 'Duration' type
+// TODO: Add support for 'Empty' type
+// TODO: Add support for Well-Known Types (e.g., DoubleValue, FloatValue, Int64Value, etc.)
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,7 +263,7 @@ mod tests {
             name: "name".to_string(),
             number: 1,
             label: FieldLabel::Optional,
-            typ: String::new(),
+            typ: FieldType::MessageOrEnum(String::new()),
             options: Vec::new(),
         });
         message.fields.push(Field {
