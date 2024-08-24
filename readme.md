@@ -1,15 +1,15 @@
-# Protobuf to Zod
+# Protobuf to Zod (WIP)
 
 ## Overview
 
 The Protobuf to Zod Converter is a Rust-based tool designed to transform Protocol Buffer (protobuf) definitions into Zod schemas. This project aims to bridge the gap between the widely used protobuf format and the TypeScript-first schema validation library, Zod.
 
-## Features
+## Features and Design Goals
 
-- Parse Protocol Buffer (version 3) files
-- Generate corresponding Zod schemas
-- Support for messages, enums, nested types, and more
-- Robust error handling and reporting
+- [x] Parse Protocol Buffer (version 3) files
+- [x] Support for messages, enums, nested types, and more
+- [ ] Generate corresponding Zod schemas
+- [ ] Robust error handling and reporting
 
 ## Table of Contents
 
