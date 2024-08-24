@@ -63,12 +63,10 @@ where
             Token::Package => parse_package(tokens, &mut proto_file)?,
             Token::Import => parse_import(tokens, &mut proto_file)?,
             Token::Message => {
-                tokens.next(); // consume 'message' token
                 let message = parse_message(tokens)?;
                 proto_file.messages.push(message);
             }
             Token::Enum => {
-                tokens.next(); // consume 'enum' token
                 let enum_def = parse_enum(tokens)?;
                 proto_file.enums.push(enum_def);
             }
@@ -284,7 +282,6 @@ where
 
 /// Parses a message definition from the token stream.
 ///
-/// This function expects the 'message' keyword to have already been consumed.
 /// It parses the message name, opening brace, message body (including nested messages,
 /// enums, fields, options, and reserved statements), and closing brace.
 ///
@@ -453,7 +450,6 @@ where
 
 /// Parses an enum definition from the token stream.
 ///
-/// This function expects the 'enum' keyword to have already been consumed.
 /// It parses the enum name, opening brace, enum body (including enum values
 /// and options), and closing brace.
 ///

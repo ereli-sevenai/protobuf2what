@@ -255,6 +255,8 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
             line,
             column
         );
+        debug!("Remaining input: {:?}", remaining);
+
         let (new_remaining, whitespace) =
             match recognize(multispace0::<&str, NomError<&str>>)(remaining) {
                 Ok(result) => result,
@@ -283,6 +285,9 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
         }
 
         remaining = new_remaining;
+        if remaining.is_empty() {
+            break;
+        }
 
         let token_result = alt((
             map(parse_token, Some),

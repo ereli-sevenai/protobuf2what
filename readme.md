@@ -36,6 +36,12 @@ To set up the Protobuf to Zod Converter, follow these steps:
    cargo build --release
    ```
 
+## Developing
+
+```
+RUST_LOG=trace cargo run
+```
+
 ## Usage
 
 To use the Protobuf to Zod Converter:
