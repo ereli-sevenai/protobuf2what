@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Location {
     pub line: usize,
     pub column: usize,
@@ -10,6 +10,12 @@ pub struct Location {
 impl Location {
     pub fn new(line: usize, column: usize) -> Self {
         Location { line, column }
+    }
+}
+
+impl fmt::Display for Location {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "line {}, column {}", self.line, self.column)
     }
 }
 
@@ -159,7 +165,10 @@ mod tests {
 
     #[test]
     fn test_parse_error_display() {
-        let error = ParseError::UnexpectedToken("Found 'int', expected 'string'".to_string());
+        let error = ParseError::UnexpectedToken(
+            "Found 'int', expected 'string'".to_string(),
+            Location { line: 0, column: 0 },
+        );
         assert_eq!(
             format!("{}", error),
             "Unexpected token: Found 'int', expected 'string'"
@@ -168,7 +177,10 @@ mod tests {
 
     #[test]
     fn test_location_error() {
-        let error = ParseError::InvalidSyntax("Missing semicolon".to_string());
+        let error = ParseError::InvalidSyntax(
+            "Missing semicolon".to_string(),
+            Location { line: 0, column: 0 },
+        );
         let location = SourceLocation {
             line: 10,
             column: 15,

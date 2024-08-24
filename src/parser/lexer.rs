@@ -9,6 +9,7 @@ use nom::{
 };
 
 use super::{error::Location, ParseError};
+use log::{debug, trace};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token<'a> {
@@ -33,6 +34,7 @@ pub enum Token<'a> {
     Extensions,
     Identifier(&'a str),
     StringLiteral(&'a str),
+    StringType,
     IntLiteral(i64),
     FloatLiteral(f64),
     Equals,
@@ -76,6 +78,7 @@ impl<'a> ToString for Token<'a> {
             Token::Extensions => "extensions".to_string(),
             Token::Identifier(s) => s.to_string(),
             Token::StringLiteral(s) => format!("\"{}\"", s),
+            Token::StringType => "string".to_string(),
             Token::IntLiteral(i) => i.to_string(),
             Token::FloatLiteral(f) => f.to_string(),
             Token::Equals => "=".to_string(),
@@ -94,6 +97,34 @@ impl<'a> ToString for Token<'a> {
             Token::Comment => "comment".to_string(),
             Token::Whitespace => "whitespace".to_string(),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TokenWithLocation<'a> {
+    pub token: Token<'a>,
+    pub location: Location,
+}
+
+impl<'a> TokenWithLocation<'a> {
+    pub fn expect(&self, expected: Token) -> Result<TokenWithLocation<'a>, ParseError> {
+        if self.token != expected {
+            Err(ParseError::UnexpectedToken(
+                format!("Expected {:?}, found {:?}", expected, self.token),
+                self.location,
+            ))
+        } else {
+            Ok(TokenWithLocation {
+                token: self.token.clone(),
+                location: self.location,
+            })
+        }
+    }
+}
+
+impl<'a> PartialEq for TokenWithLocation<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.token == other.token && self.location == other.location
     }
 }
 
@@ -204,35 +235,22 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
     )(input)
 }
 
-#[derive(Debug, Clone)]
-pub struct TokenWithLocation<'a> {
-    pub token: Token<'a>,
-    pub location: Location,
-}
-
-impl<'a> TokenWithLocation<'a> {
-    pub fn expect(&self, expected: Token) -> Result<TokenWithLocation<'a>, ParseError> {
-        if self.token != expected {
-            Err(ParseError::UnexpectedToken(
-                format!("Expected {:?}, found {:?}", expected, self.token),
-                self.location,
-            ))
-        } else {
-            Ok(TokenWithLocation {
-                token: self.token.clone(),
-                location: self.location,
-            })
-        }
-    }
-}
-
 pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
+    debug!(
+        "Starting tokenization of input with length: {}",
+        input.len()
+    );
     let mut tokens = Vec::new();
     let mut remaining = input;
     let mut line = 1;
     let mut column = 1;
 
     while !remaining.is_empty() {
+        trace!(
+            "Processing remaining input at line {}, column {}",
+            line,
+            column
+        );
         let (new_remaining, whitespace) = recognize(multispace0)(remaining)?;
         let start_line = line;
         let start_column = column;
@@ -242,6 +260,7 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
             if c == '\n' {
                 line += 1;
                 column = 1;
+                trace!("New line detected, now at line {}", line);
             } else {
                 column += 1;
             }
@@ -260,15 +279,23 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
                 token: token.clone(),
                 location,
             };
+            debug!("Tokenized: {:?} at {:?}", token, location);
             tokens.push(token_with_location);
 
             // Update column for the next token
             column += token.to_string().len();
+        } else {
+            trace!(
+                "Skipped comment or whitespace at line {}, column {}",
+                line,
+                column
+            );
         }
 
         remaining = new_remaining;
     }
 
+    debug!("Tokenization complete. Total tokens: {}", tokens.len());
     Ok(tokens)
 }
 
@@ -293,29 +320,78 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::Syntax,
-                Token::Equals,
-                Token::StringLiteral("proto3"),
-                Token::Semicolon,
-                Token::Message,
-                Token::Identifier("Person"),
-                Token::OpenBrace,
-                Token::Identifier("string"),
-                Token::Identifier("name"),
-                Token::Equals,
-                Token::IntLiteral(1),
-                Token::Semicolon,
-                Token::Identifier("int32"),
-                Token::Identifier("age"),
-                Token::Equals,
-                Token::IntLiteral(2),
-                Token::Semicolon,
-                Token::Identifier("float"),
-                Token::Identifier("height"),
-                Token::Equals,
-                Token::IntLiteral(3),
-                Token::Semicolon,
-                Token::CloseBrace,
+                TokenWithLocation {
+                    token: Token::Syntax,
+                    location: Location::new(1, 1)
+                },
+                TokenWithLocation {
+                    token: Token::Equals,
+                    location: Location::new(1, 8)
+                },
+                TokenWithLocation {
+                    token: Token::StringLiteral("proto3"),
+                    location: Location::new(1, 10)
+                },
+                TokenWithLocation {
+                    token: Token::Semicolon,
+                    location: Location::new(1, 17)
+                },
+                TokenWithLocation {
+                    token: Token::Message,
+                    location: Location::new(3, 1)
+                },
+                TokenWithLocation {
+                    token: Token::Identifier("Person"),
+                    location: Location::new(3, 9)
+                },
+                TokenWithLocation {
+                    token: Token::OpenBracket,
+                    location: Location::new(3, 16)
+                },
+                TokenWithLocation {
+                    token: Token::StringType,
+                    location: Location::new(4, 3)
+                },
+                TokenWithLocation {
+                    token: Token::Identifier("name"),
+                    location: Location::new(4, 10)
+                },
+                TokenWithLocation {
+                    token: Token::Equals,
+                    location: Location::new(4, 15)
+                },
+                TokenWithLocation {
+                    token: Token::IntLiteral(1),
+                    location: Location::new(4, 17)
+                },
+                TokenWithLocation {
+                    token: Token::Semicolon,
+                    location: Location::new(4, 18)
+                },
+                TokenWithLocation {
+                    token: Token::IntLiteral(2),
+                    location: Location::new(5, 3)
+                },
+                TokenWithLocation {
+                    token: Token::Identifier("age"),
+                    location: Location::new(5, 9)
+                },
+                TokenWithLocation {
+                    token: Token::Equals,
+                    location: Location::new(5, 13)
+                },
+                TokenWithLocation {
+                    token: Token::IntLiteral(3),
+                    location: Location::new(5, 15)
+                },
+                TokenWithLocation {
+                    token: Token::Semicolon,
+                    location: Location::new(5, 16)
+                },
+                TokenWithLocation {
+                    token: Token::CloseBracket,
+                    location: Location::new(6, 1)
+                },
             ]
         );
     }

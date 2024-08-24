@@ -268,7 +268,7 @@ mod tests {
             name: "age".to_string(),
             number: 2,
             label: FieldLabel::Optional,
-            typ: String::new(),
+            typ: FieldType::String,
             options: Vec::new(),
         });
         proto_file.messages.push(message);

@@ -17,9 +17,15 @@ use error::Location;
 pub use error::{ParseError, ParseResult};
 pub use lexer::{tokenize, Token, TokenWithLocation};
 
+use log::debug;
 use std::iter::Peekable;
 
 /// Parse a Protobuf file content into an AST representation
+///
+/// This function takes a string slice containing the Protobuf file content,
+/// tokenizes it, and then parses the tokens to create an Abstract Syntax Tree (AST)
+/// representation of the Protobuf file. It handles various Protobuf elements such as
+/// syntax declarations, package declarations, imports, messages, enums, and services.
 ///
 /// # Arguments
 ///
@@ -27,9 +33,18 @@ use std::iter::Peekable;
 ///
 /// # Returns
 ///
-/// * `Result<ProtoFile, ParseError>` - The parsed AST or an error if parsing failed
+/// * `Result<ProtoFile, ParseError>` - The parsed AST representation of the Protobuf file,
+///   or a ParseError if any parsing errors occur during the process
+// * `Result<ProtoFile, ParseError>` - The parsed AST or an error if parsing failed
 pub fn parse_proto_file(input: &str) -> Result<ProtoFile, ParseError> {
-    let tokens = tokenize(input).map_err(ParseError::from)?;
+    let tokens = tokenize(input)?;
+
+    for (index, token_with_location) in tokens.iter().enumerate() {
+        debug!(
+            "Token {}: {:?} at {}",
+            index, token_with_location.token, token_with_location.location
+        );
+    }
 
     let mut token_iter = tokens.into_iter().peekable();
 
@@ -76,6 +91,19 @@ where
     Ok(proto_file)
 }
 
+/// Parses the syntax declaration of a Protobuf file.
+///
+/// This function expects to find a syntax declaration at the beginning of the file,
+/// which specifies whether the file uses Proto2 or Proto3 syntax.
+///
+/// # Arguments
+///
+/// * `tokens` - A mutable reference to a peekable iterator of TokenWithLocation.
+/// * `proto_file` - A mutable reference to the ProtoFile being constructed.
+///
+/// # Returns
+///
+/// * `Result<(), ParseError>` - Ok(()) if parsing succeeds, or a ParseError if any issues occur.
 fn parse_syntax<'a, I>(
     tokens: &mut Peekable<I>,
     proto_file: &mut ProtoFile,
@@ -134,6 +162,20 @@ where
     Ok(())
 }
 
+/// Parses the package declaration of a Protobuf file.
+///
+/// This function expects to find a package declaration in the token stream.
+/// It consumes the 'package' keyword, parses the package name, and updates
+/// the ProtoFile struct with the parsed package name.
+///
+/// # Arguments
+///
+/// * `tokens` - A mutable reference to a peekable iterator of TokenWithLocation.
+/// * `proto_file` - A mutable reference to the ProtoFile being constructed.
+///
+/// # Returns
+///
+/// * `Result<(), ParseError>` - Ok(()) if parsing succeeds, or a ParseError if any issues occur.
 fn parse_package<'a, I>(
     tokens: &mut Peekable<I>,
     proto_file: &mut ProtoFile,
@@ -240,6 +282,20 @@ where
     Ok(())
 }
 
+/// Parses a message definition from the token stream.
+///
+/// This function expects the 'message' keyword to have already been consumed.
+/// It parses the message name, opening brace, message body (including nested messages,
+/// enums, fields, options, and reserved statements), and closing brace.
+///
+/// # Arguments
+///
+/// * `tokens` - A mutable reference to a peekable iterator of TokenWithLocation.
+///
+/// # Returns
+///
+/// * `Result<Message, ParseError>` - A Result containing the parsed Message on success,
+///   or a ParseError on failure.
 fn parse_message<'a, I>(tokens: &mut Peekable<I>) -> Result<Message, ParseError>
 where
     I: Iterator<Item = TokenWithLocation<'a>>,
@@ -304,6 +360,20 @@ where
     Err(ParseError::UnexpectedEndOfInput(open_brace_token.location))
 }
 
+/// Parses a message definition from the token stream.
+///
+/// This function expects the 'message' keyword to have already been consumed.
+/// It parses the message name, opening brace, message body (including nested messages,
+/// enums, fields, options, and reserved statements), and closing brace.
+///
+/// # Arguments
+///
+/// * `tokens` - A mutable reference to a peekable iterator of TokenWithLocation.
+///
+/// # Returns
+///
+/// * `Result<Message, ParseError>` - A Result containing the parsed Message on success,
+///   or a ParseError on failure.
 fn parse_field<'a, I>(tokens: &mut Peekable<I>) -> Result<Field, ParseError>
 where
     I: Iterator<Item = TokenWithLocation<'a>>,
@@ -381,6 +451,20 @@ where
     })
 }
 
+/// Parses an enum definition from the token stream.
+///
+/// This function expects the 'enum' keyword to have already been consumed.
+/// It parses the enum name, opening brace, enum body (including enum values
+/// and options), and closing brace.
+///
+/// # Arguments
+///
+/// * `tokens` - A mutable reference to a peekable iterator of TokenWithLocation.
+///
+/// # Returns
+///
+/// * `Result<Enum, ParseError>` - A Result containing the parsed Enum on success,
+///   or a ParseError on failure.
 fn parse_enum<'a, I>(tokens: &mut Peekable<I>) -> Result<Enum, ParseError>
 where
     I: Iterator<Item = TokenWithLocation<'a>>,
@@ -442,6 +526,19 @@ where
     Err(ParseError::UnexpectedEndOfInput(open_brace_token.location))
 }
 
+/// Parses an enum value from the token stream.
+///
+/// This function expects to parse an enum value name, '=' token, and an integer value.
+/// It also handles optional enum value options enclosed in square brackets.
+///
+/// # Arguments
+///
+/// * `tokens` - A mutable reference to a peekable iterator of TokenWithLocation.
+///
+/// # Returns
+///
+/// * `Result<EnumValue, ParseError>` - A Result containing the parsed EnumValue on success,
+///   or a ParseError on failure.
 fn parse_enum_value<'a, I>(tokens: &mut Peekable<I>) -> Result<EnumValue, ParseError>
 where
     I: Iterator<Item = TokenWithLocation<'a>>,
@@ -512,6 +609,47 @@ where
         number: number.try_into().unwrap(),
         options,
     })
+}
+
+fn parse_enum_option<'a, I>(
+    tokens: &mut Peekable<I>,
+    options: &mut Vec<EnumValueOption>,
+) -> Result<(), ParseError>
+where
+    I: Iterator<Item = TokenWithLocation<'a>>,
+{
+    // Consume 'option' token
+    let option_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::Option)?;
+
+    // Parse option name
+    let name_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(option_token.location))?;
+
+    // Expect equals sign
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
+        .expect(Token::Equals)?;
+
+    // Parse option value
+    let value = parse_constant(tokens)?;
+
+    // Expect semicolon
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
+        .expect(Token::Semicolon)?;
+
+    options.push(EnumValueOption {
+        name: name_token.token.to_string(),
+        value: EnumValueOptionValue::Identifier(value),
+    });
+
+    Ok(())
 }
 
 fn parse_enum_value_options<'a, I>(
@@ -657,47 +795,6 @@ where
     Err(ParseError::UnexpectedEndOfInput(open_brace_token.location))
 }
 
-fn parse_enum_option<'a, I>(
-    tokens: &mut Peekable<I>,
-    options: &mut Vec<EnumValueOption>,
-) -> Result<(), ParseError>
-where
-    I: Iterator<Item = TokenWithLocation<'a>>,
-{
-    // Consume 'option' token
-    let option_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
-        .expect(Token::Option)?;
-
-    // Parse option name
-    let name_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(option_token.location))?;
-
-    // Expect equals sign
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
-        .expect(Token::Equals)?;
-
-    // Parse option value
-    let value = parse_constant(tokens)?;
-
-    // Expect semicolon
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
-        .expect(Token::Semicolon)?;
-
-    options.push(EnumValueOption {
-        name: name_token.token.to_string(),
-        value: EnumValueOptionValue::Identifier(value),
-    });
-
-    Ok(())
-}
-
 fn parse_option<'a, I>(
     tokens: &mut Peekable<I>,
     options: &mut Vec<ProtoOption>,
@@ -773,64 +870,6 @@ fn parse_field_type(token: &TokenWithLocation) -> Result<FieldType, ParseError> 
         )),
     }
 }
-
-// fn parse_field_option<'a, I>(tokens: &mut Peekable<I>) -> Result<FieldOptionValue, ParseError>
-// where
-//     I: Iterator<Item = TokenWithLocation<'a>>,
-// {
-//     // Parse option name
-//     let name_token = tokens
-//         .next()
-//         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
-//     match &name_token.token {
-//         Token::Identifier(name) => name.to_string(),
-//         _ => {
-//             return Err(ParseError::UnexpectedToken(
-//                 format!("Expected option name, found {:?}", name_token.token),
-//                 name_token.location,
-//             ))
-//         }
-//     };
-
-//     // Expect '='
-//     let equals_token = tokens
-//         .next()
-//         .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
-//         .expect(Token::Equals)?;
-
-//     // Parse option value
-//     let value_token = tokens
-//         .next()
-//         .ok_or_else(|| ParseError::UnexpectedEndOfInput(equals_token.location))?;
-
-//     let value = match &value_token.token {
-//         Token::StringLiteral(s) => FieldOptionValue {
-//             name: name_token.token.to_string(),
-//             value: OptionValue::String(s.to_string()),
-//         },
-//         Token::IntLiteral(i) => FieldOptionValue {
-//             name: name_token.token.to_string(),
-//             value: OptionValue::Int(*i),
-//         },
-//         Token::FloatLiteral(f) => FieldOptionValue {
-//             name: name_token.token.to_string(),
-//             value: OptionValue::Float(*f),
-//         },
-//         Token::Identifier(id) => FieldOptionValue {
-//             name: name_token.token.to_string(),
-//             value: OptionValue::Identifier(id.to_string()),
-//         },
-//         _ => {
-//             return Err(ParseError::UnexpectedToken(
-//                 format!("Expected option value, found {:?}", value_token.token),
-//                 value_token.location,
-//             ))
-//         }
-//     };
-
-//     // Return the FieldOptionValue
-//     Ok(value)
-// }
 
 fn parse_method<'a, I>(tokens: &mut Peekable<I>) -> Result<Method, ParseError>
 where
@@ -997,22 +1036,6 @@ where
     }
     Ok(())
 }
-
-// fn parse_integer<'a, I>(tokens: &mut Peekable<I>) -> Result<i32, ParseError>
-// where
-//     I: Iterator<Item = TokenWithLocation<'a>>,
-// {
-//     let token_with_location = tokens
-//         .next()
-//         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
-//     match token_with_location.token {
-//         Token::IntLiteral(value) => Ok(value as i32),
-//         _ => Err(ParseError::UnexpectedToken(
-//             format!("Expected integer, found {:?}", token_with_location.token),
-//             token_with_location.location,
-//         )),
-//     }
-// }
 
 fn parse_constant<'a, I>(tokens: &mut Peekable<I>) -> Result<String, ParseError>
 where
