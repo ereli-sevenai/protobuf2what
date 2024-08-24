@@ -12,7 +12,7 @@ use crate::parser::ast::{
     ProtoFile, ProtoOption, Service, Syntax,
 };
 
-use ast::{EnumValueOption, EnumValueOptionValue, FieldOptionValue, FieldType};
+use ast::{EnumValueOption, EnumValueOptionValue, FieldType};
 use error::Location;
 pub use error::{ParseError, ParseResult};
 pub use lexer::{tokenize, Token, TokenWithLocation};
@@ -774,63 +774,64 @@ fn parse_field_type(token: &TokenWithLocation) -> Result<FieldType, ParseError> 
     }
 }
 
-fn parse_field_option<'a, I>(tokens: &mut Peekable<I>) -> Result<FieldOptionValue, ParseError>
-where
-    I: Iterator<Item = TokenWithLocation<'a>>,
-{
-    // Parse option name
-    let name_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
-    match &name_token.token {
-        Token::Identifier(name) => name.to_string(),
-        _ => {
-            return Err(ParseError::UnexpectedToken(
-                format!("Expected option name, found {:?}", name_token.token),
-                name_token.location,
-            ))
-        }
-    };
+// fn parse_field_option<'a, I>(tokens: &mut Peekable<I>) -> Result<FieldOptionValue, ParseError>
+// where
+//     I: Iterator<Item = TokenWithLocation<'a>>,
+// {
+//     // Parse option name
+//     let name_token = tokens
+//         .next()
+//         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
+//     match &name_token.token {
+//         Token::Identifier(name) => name.to_string(),
+//         _ => {
+//             return Err(ParseError::UnexpectedToken(
+//                 format!("Expected option name, found {:?}", name_token.token),
+//                 name_token.location,
+//             ))
+//         }
+//     };
 
-    // Expect '='
-    let equals_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
-        .expect(Token::Equals)?;
+//     // Expect '='
+//     let equals_token = tokens
+//         .next()
+//         .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
+//         .expect(Token::Equals)?;
 
-    // Parse option value
-    let value_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(equals_token.location))?;
+//     // Parse option value
+//     let value_token = tokens
+//         .next()
+//         .ok_or_else(|| ParseError::UnexpectedEndOfInput(equals_token.location))?;
 
-    let value = match &value_token.token {
-        Token::StringLiteral(s) => FieldOptionValue {
-            name: name_token.token.to_string(),
-            value: OptionValue::String(s.to_string()),
-        },
-        Token::IntLiteral(i) => FieldOptionValue {
-            name: name_token.token.to_string(),
-            value: OptionValue::Int(*i),
-        },
-        Token::FloatLiteral(f) => FieldOptionValue {
-            name: name_token.token.to_string(),
-            value: OptionValue::Float(*f),
-        },
-        Token::Identifier(id) => FieldOptionValue {
-            name: name_token.token.to_string(),
-            value: OptionValue::Identifier(id.to_string()),
-        },
-        _ => {
-            return Err(ParseError::UnexpectedToken(
-                format!("Expected option value, found {:?}", value_token.token),
-                value_token.location,
-            ))
-        }
-    };
+//     let value = match &value_token.token {
+//         Token::StringLiteral(s) => FieldOptionValue {
+//             name: name_token.token.to_string(),
+//             value: OptionValue::String(s.to_string()),
+//         },
+//         Token::IntLiteral(i) => FieldOptionValue {
+//             name: name_token.token.to_string(),
+//             value: OptionValue::Int(*i),
+//         },
+//         Token::FloatLiteral(f) => FieldOptionValue {
+//             name: name_token.token.to_string(),
+//             value: OptionValue::Float(*f),
+//         },
+//         Token::Identifier(id) => FieldOptionValue {
+//             name: name_token.token.to_string(),
+//             value: OptionValue::Identifier(id.to_string()),
+//         },
+//         _ => {
+//             return Err(ParseError::UnexpectedToken(
+//                 format!("Expected option value, found {:?}", value_token.token),
+//                 value_token.location,
+//             ))
+//         }
+//     };
 
-    // Return the FieldOptionValue
-    Ok(value)
-}
+//     // Return the FieldOptionValue
+//     Ok(value)
+// }
+
 fn parse_method<'a, I>(tokens: &mut Peekable<I>) -> Result<Method, ParseError>
 where
     I: Iterator<Item = TokenWithLocation<'a>>,
@@ -997,21 +998,21 @@ where
     Ok(())
 }
 
-fn parse_integer<'a, I>(tokens: &mut Peekable<I>) -> Result<i32, ParseError>
-where
-    I: Iterator<Item = TokenWithLocation<'a>>,
-{
-    let token_with_location = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
-    match token_with_location.token {
-        Token::IntLiteral(value) => Ok(value as i32),
-        _ => Err(ParseError::UnexpectedToken(
-            format!("Expected integer, found {:?}", token_with_location.token),
-            token_with_location.location,
-        )),
-    }
-}
+// fn parse_integer<'a, I>(tokens: &mut Peekable<I>) -> Result<i32, ParseError>
+// where
+//     I: Iterator<Item = TokenWithLocation<'a>>,
+// {
+//     let token_with_location = tokens
+//         .next()
+//         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
+//     match token_with_location.token {
+//         Token::IntLiteral(value) => Ok(value as i32),
+//         _ => Err(ParseError::UnexpectedToken(
+//             format!("Expected integer, found {:?}", token_with_location.token),
+//             token_with_location.location,
+//         )),
+//     }
+// }
 
 fn parse_constant<'a, I>(tokens: &mut Peekable<I>) -> Result<String, ParseError>
 where
