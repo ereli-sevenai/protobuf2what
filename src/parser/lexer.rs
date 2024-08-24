@@ -1,6 +1,6 @@
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take_while},
+    bytes::complete::{tag, take, take_while},
     character::complete::{alpha1, alphanumeric1, char, digit1, multispace0},
     combinator::{map, map_res, opt, recognize},
     multi::many0,
@@ -10,6 +10,7 @@ use nom::{
 
 use super::{error::Location, ParseError};
 use log::{debug, trace};
+use nom::error::Error as NomError;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token<'a> {
@@ -52,6 +53,7 @@ pub enum Token<'a> {
     Required,
     Comment,
     Whitespace,
+    Unknown(String),
 }
 
 impl<'a> ToString for Token<'a> {
@@ -96,6 +98,7 @@ impl<'a> ToString for Token<'a> {
             Token::Required => "required".to_string(),
             Token::Comment => "comment".to_string(),
             Token::Whitespace => "whitespace".to_string(),
+            Token::Unknown(s) => s.to_string(),
         }
     }
 }
@@ -231,6 +234,7 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
             parse_float_literal,
             parse_int_literal,
             parse_symbol,
+            map(take(1usize), |c: &str| Token::Unknown(c.to_string())),
         )),
     )(input)
 }
@@ -251,7 +255,19 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
             line,
             column
         );
-        let (new_remaining, whitespace) = recognize(multispace0)(remaining)?;
+        let (new_remaining, whitespace) =
+            match recognize(multispace0::<&str, NomError<&str>>)(remaining) {
+                Ok(result) => result,
+                Err(e) => {
+                    return Err(ParseError::LexerError(
+                        format!(
+                            "Failed to parse whitespace at line {}, column {}: {:?}",
+                            line, column, e
+                        ),
+                        Location::new(line, column),
+                    ));
+                }
+            };
         let start_line = line;
         let start_column = column;
 
@@ -268,31 +284,50 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
 
         remaining = new_remaining;
 
-        let (new_remaining, token_opt) = alt((
+        let token_result = alt((
             map(parse_token, Some),
             map(recognize(parse_comment), |_| None),
-        ))(remaining)?;
+        ))(remaining);
 
-        if let Some(token) = token_opt {
-            let location = Location::new(start_line, start_column);
-            let token_with_location = TokenWithLocation {
-                token: token.clone(),
-                location,
-            };
-            debug!("Tokenized: {:?} at {:?}", token, location);
-            tokens.push(token_with_location);
+        match token_result {
+            Ok((new_remaining, token_opt)) => {
+                if let Some(token) = token_opt {
+                    let location = Location::new(start_line, start_column);
+                    let token_with_location = TokenWithLocation {
+                        token: token.clone(),
+                        location,
+                    };
+                    debug!("Tokenized: {:?} at {:?}", token, location);
+                    tokens.push(token_with_location);
 
-            // Update column for the next token
-            column += token.to_string().len();
-        } else {
-            trace!(
-                "Skipped comment or whitespace at line {}, column {}",
-                line,
-                column
-            );
+                    // Update column for the next token
+                    column += token.to_string().len();
+                } else {
+                    trace!(
+                        "Skipped comment or whitespace at line {}, column {}",
+                        line,
+                        column
+                    );
+                }
+                remaining = new_remaining;
+            }
+            Err(nom::Err::Error(e)) | Err(nom::Err::Failure(e)) => {
+                debug!("Error occurred with remaining input: {:?}", remaining);
+                return Err(ParseError::LexerError(
+                    format!(
+                        "Failed to parse token at line {}, column {}: {:?}",
+                        line, column, e
+                    ),
+                    Location::new(line, column),
+                ));
+            }
+            Err(nom::Err::Incomplete(_)) => {
+                return Err(ParseError::LexerError(
+                    format!("Incomplete input at line {}, column {}", line, column),
+                    Location::new(line, column),
+                ));
+            }
         }
-
-        remaining = new_remaining;
     }
 
     debug!("Tokenization complete. Total tokens: {}", tokens.len());
