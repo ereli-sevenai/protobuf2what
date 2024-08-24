@@ -15,7 +15,8 @@ pub enum Reserved {
 pub enum OptionValue {
     Identifier(String),
     String(String),
-    Number(f64),
+    Int(i64),
+    Float(f64),
     Boolean(bool),
     List(Vec<OptionValue>),
     Map(Vec<(OptionValue, OptionValue)>),
@@ -99,12 +100,9 @@ pub enum FieldType {
     Map(Box<FieldType>, Box<FieldType>),
 }
 
-pub enum FieldOptionValue {
-    String(String),
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    Identifier(String), // For enum values or custom identifiers
+pub struct FieldOptionValue {
+    pub name: String,
+    pub value: OptionValue,
 }
 
 #[derive(Debug, Clone, PartialEq)]

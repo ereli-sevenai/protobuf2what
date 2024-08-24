@@ -227,11 +227,13 @@ impl<'a> TokenWithLocation<'a> {
 }
 
 pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
+    let mut tokens = Vec::new();
+    let mut remaining = input;
     let mut line = 1;
     let mut column = 1;
 
-    let parse_with_location = |i: &str| {
-        let (i, whitespace) = recognize(multispace0)(i)?;
+    while !remaining.is_empty() {
+        let (new_remaining, whitespace) = recognize(multispace0)(remaining)?;
         let start_line = line;
         let start_column = column;
 
@@ -245,32 +247,29 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
             }
         }
 
-        let (i, token_opt) = alt((
+        remaining = new_remaining;
+
+        let (new_remaining, token_opt) = alt((
             map(parse_token, Some),
             map(recognize(parse_comment), |_| None),
-        ))(i)?;
+        ))(remaining)?;
 
-        let result = token_opt.map(|token| {
+        if let Some(token) = token_opt {
             let location = Location::new(start_line, start_column);
-            TokenWithLocation { token, location }
-        });
+            let token_with_location = TokenWithLocation {
+                token: token.clone(),
+                location,
+            };
+            tokens.push(token_with_location);
 
-        // Update column for the next token
-        if let Some(token) = &result {
-            column += token.token.to_string().len();
+            // Update column for the next token
+            column += token.to_string().len();
         }
 
-        Ok((i, result))
-    };
+        remaining = new_remaining;
+    }
 
-    many0(parse_with_location)(input)
-        .map(|(_, tokens)| tokens.into_iter().flatten().collect())
-        .map_err(|e| {
-            ParseError::LexerError(
-                format!("Tokenization error: {:?}", e),
-                Location::new(line, column),
-            )
-        })
+    Ok(tokens)
 }
 
 #[cfg(test)]
