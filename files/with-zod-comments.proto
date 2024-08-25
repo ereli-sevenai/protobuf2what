@@ -1,3 +1,6 @@
+syntax = "proto3";
+// @zod-version: 1.0
+
 message User // @zod { description: "Represents a user in the system" }
 {
   string username = 1; // @zod { min: 3, max: 50, description: "User's username" }
