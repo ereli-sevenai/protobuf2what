@@ -233,7 +233,6 @@ impl ProtoOption {
 }
 
 // TODO: Add support for 'extend' keyword
-// TODO: Add support for 'extensions' keyword (deprecated in proto3)
 // TODO: Add support for 'Any' type
 // TODO: Add support for 'Timestamp' type
 // TODO: Add support for 'Duration' type

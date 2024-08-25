@@ -1,0 +1,17 @@
+message User // @zod { description: "Represents a user in the system" }
+{
+  string username = 1; // @zod { min: 3, max: 50, description: "User's username" }
+  string email = 2; // @zod { email: true, description: "User's email address" }
+  int32 age = 3; // @zod { min: 0, max: 120, description: "User's age in years" }
+  string password = 4; // @zod { regex: "^(?=.*[A-Za-z])(?=.*\\d)[A-Za-z\\d]{8,}$", description: "User's password" }
+  repeated string tags = 5; // @zod { array: { min: 1, max: 10 }, description: "User's tags" }
+  UserType type = 6; // @zod { description: "User type", default: "STANDARD" }
+  string website = 7; // @zod { url: true, optional: true, description: "User's website" }
+}
+
+enum UserType // @zod { description: "Types of users in the system" }
+{
+  STANDARD = 0;
+  ADMIN = 1;
+  MODERATOR = 2;
+}

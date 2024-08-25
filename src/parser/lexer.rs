@@ -604,7 +604,7 @@ mod tests {
 
         assert!(result.is_err());
         if let Err(ParseError::LexerError(msg, location)) = result {
-            assert!(msg.contains("Tokenization error"));
+            assert!(msg.contains("Failed to parse token"));
             assert_eq!(location, Location::new(1, 29));
         } else {
             panic!("Expected LexerError");

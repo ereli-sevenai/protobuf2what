@@ -7,7 +7,6 @@
 use std::error::Error;
 use std::fmt;
 
-pub mod intermediate;
 pub mod parser;
 pub mod visitor;
 

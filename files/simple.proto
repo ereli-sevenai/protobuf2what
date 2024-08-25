@@ -5,6 +5,7 @@ message Person {
     string name = 1;
     int32 age = 2;
     repeated string hobbies = 3;
+    Gender MALE = 4;
 }
 
 enum Gender {
