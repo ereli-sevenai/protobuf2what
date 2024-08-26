@@ -380,29 +380,47 @@ where
         .map(|t| t.location)
         .unwrap_or(Location::new(0, 0));
 
+    debug!("Starting to parse field at {:?}", start_location);
+
     // Parse field label (optional, repeated, required)
     let label = match tokens.peek().map(|t| &t.token) {
         Some(Token::Repeated) => {
             tokens.next();
+            debug!("Found repeated label");
             FieldLabel::Repeated
         }
         Some(Token::Required) => {
             tokens.next();
+            debug!("Found required label");
             FieldLabel::Required
         }
-        _ => FieldLabel::Optional,
+        _ => {
+            debug!("Assuming optional label");
+            FieldLabel::Optional
+        }
     };
 
     // Parse field type
     let type_token = tokens
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(start_location))?;
-    let typ = parse_field_type(&type_token)?;
+
+    debug!("Parsing field type: {:?}", type_token.token);
+
+    let typ = if type_token.token == Token::Map {
+        debug!("Parsing map type");
+        parse_map_type(tokens)?
+    } else {
+        parse_field_type(&type_token)?
+    };
+
+    debug!("Field type parsed: {:?}", typ);
 
     // Parse field name
     let name_token = tokens
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(type_token.location))?;
+    debug!("Parsing field name: {:?}", name_token.token);
     let name = match name_token.token {
         Token::Identifier(name) => name.to_string(),
         _ => {
@@ -412,6 +430,7 @@ where
             ))
         }
     };
+    debug!("Field name parsed: {}", name);
 
     // Expect '='
     let equals_token = tokens
@@ -446,6 +465,43 @@ where
         typ,
         options: Vec::new(), // TODO: Parse field options
     })
+}
+
+fn parse_map_type<'a, I>(tokens: &mut Peekable<I>) -> Result<FieldType, ParseError>
+where
+    I: Iterator<Item = TokenWithLocation<'a>>,
+{
+    // Expect '<'
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::LessThan)?;
+
+    // Parse key type
+    let key_type_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
+    let key_type = parse_field_type(&key_type_token)?;
+
+    // Expect ','
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::Comma)?;
+
+    // Parse value type
+    let value_type_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
+    let value_type = parse_field_type(&value_type_token)?;
+
+    // Expect '>'
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::GreaterThan)?;
+
+    Ok(FieldType::Map(Box::new(key_type), Box::new(value_type)))
 }
 
 /// Parses an enum definition from the token stream.
@@ -852,14 +908,6 @@ fn parse_field_type(token: &TokenWithLocation) -> Result<FieldType, ParseError> 
             "bytes" => Ok(FieldType::Bytes),
             _ => Ok(FieldType::MessageOrEnum(typ.to_string())),
         },
-        Token::Map => {
-            // Handle map type parsing
-            // This is a placeholder and should be implemented based on your specific needs
-            Ok(FieldType::Map(
-                Box::new(FieldType::String),
-                Box::new(FieldType::Int32),
-            ))
-        }
         _ => Err(ParseError::UnexpectedToken(
             format!("Expected field type, found {:?}", token.token),
             token.location,
@@ -1131,6 +1179,8 @@ mod tests {
 
     #[test]
     fn test_parse_field_types() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
         let input = r#"
             message TestFieldTypes {
                 double double_field = 1;
@@ -1155,6 +1205,9 @@ mod tests {
         "#;
 
         let result = parse_proto_file(input);
+        if let Err(ref e) = result {
+            eprintln!("Error: {:?}", e);
+        }
         assert!(
             result.is_ok(),
             "Failed to parse proto file: {:?}",
