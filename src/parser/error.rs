@@ -92,14 +92,7 @@ impl ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let loc = self.location();
-        write!(
-            f,
-            "Error at line {}, column {}: {}",
-            loc.line,
-            loc.column,
-            self.message()
-        )
+        write!(f, "{}", self.message())
     }
 }
 
@@ -144,7 +137,7 @@ pub struct LocationError {
 
 impl fmt::Display for LocationError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} at {}", self.error, self.location)
+        write!(f, "Error at {}: {}", self.location, self.error)
     }
 }
 
@@ -167,7 +160,7 @@ mod tests {
     fn test_parse_error_display() {
         let error = ParseError::UnexpectedToken(
             "Found 'int', expected 'string'".to_string(),
-            Location { line: 0, column: 0 },
+            Location { line: 1, column: 1 },
         );
         assert_eq!(
             format!("{}", error),
@@ -179,7 +172,10 @@ mod tests {
     fn test_location_error() {
         let error = ParseError::InvalidSyntax(
             "Missing semicolon".to_string(),
-            Location { line: 0, column: 0 },
+            Location {
+                line: 10,
+                column: 15,
+            },
         );
         let location = SourceLocation {
             line: 10,
@@ -188,7 +184,31 @@ mod tests {
         let loc_error = error_at_location(error, location);
         assert_eq!(
             format!("{}", loc_error),
-            "Invalid syntax: Missing semicolon at line 10, column 15"
+            "Error at line 10, column 15: Invalid syntax: Missing semicolon"
         );
+    }
+
+    #[test]
+    fn test_lexer_error_display() {
+        let error = ParseError::LexerError(
+            "Unexpected character '#'".to_string(),
+            Location {
+                line: 5,
+                column: 20,
+            },
+        );
+        assert_eq!(
+            format!("{}", error),
+            "Lexer error: Unexpected character '#'"
+        );
+    }
+
+    #[test]
+    fn test_unexpected_end_of_input() {
+        let error = ParseError::UnexpectedEndOfInput(Location {
+            line: 15,
+            column: 1,
+        });
+        assert_eq!(format!("{}", error), "Unexpected end of input");
     }
 }

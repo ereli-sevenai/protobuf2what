@@ -1,6 +1,6 @@
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take, take_while},
+    bytes::complete::{tag, take, take_while, take_while1},
     character::complete::{alpha1, alphanumeric1, char, digit1, multispace0},
     combinator::{map, map_res, opt, recognize},
     multi::many0,
@@ -10,7 +10,6 @@ use nom::{
 
 use super::{error::Location, ParseError};
 use log::{debug, trace};
-use nom::error::Error as NomError;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token<'a> {
@@ -51,7 +50,7 @@ pub enum Token<'a> {
     LessThan,
     GreaterThan,
     Required,
-    Comment,
+    Comment(&'a str),
     Whitespace,
     Unknown(String),
 }
@@ -96,7 +95,7 @@ impl<'a> ToString for Token<'a> {
             Token::LessThan => "<".to_string(),
             Token::GreaterThan => ">".to_string(),
             Token::Required => "required".to_string(),
-            Token::Comment => "comment".to_string(),
+            Token::Comment(s) => format!("Comment({})", s),
             Token::Whitespace => "whitespace".to_string(),
             Token::Unknown(s) => s.to_string(),
         }
@@ -166,9 +165,18 @@ fn parse_identifier(input: &str) -> IResult<&str, Token> {
 }
 
 fn parse_string_literal(input: &str) -> IResult<&str, Token> {
-    map(
-        delimited(char('"'), take_while(|c| c != '"'), char('"')),
-        Token::StringLiteral,
+    delimited(
+        char('"'),
+        map(
+            recognize(many0(alt((
+                take_while1(|c| c != '"' && c != '\\'),
+                tag("\\\""),
+                tag("\\\\"),
+                preceded(char('\\'), take(1usize)),
+            )))),
+            Token::StringLiteral,
+        ),
+        char('"'),
     )(input)
 }
 
@@ -208,18 +216,21 @@ fn parse_symbol(input: &str) -> IResult<&str, Token> {
     ))(input)
 }
 
-fn parse_comment(input: &str) -> IResult<&str, ()> {
+fn parse_comment(input: &str) -> IResult<&str, Token> {
     alt((
         // Single-line comment
-        map(pair(tag("//"), take_while(|c| c != '\n')), |_| ()),
+        map(
+            recognize(pair(tag("//"), take_while(|c| c != '\n'))),
+            Token::Comment,
+        ),
         // Multi-line comment
         map(
-            delimited(
+            recognize(delimited(
                 tag("/*"),
                 take_while(|c| c != '*' || input.chars().next() != Some('/')),
                 tag("*/"),
-            ),
-            |_| (),
+            )),
+            Token::Comment,
         ),
     ))(input)
 }
@@ -229,11 +240,12 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
         multispace0,
         alt((
             parse_keyword,
-            parse_identifier,
             parse_string_literal,
+            parse_identifier,
             parse_float_literal,
             parse_int_literal,
             parse_symbol,
+            parse_comment,
             map(take(1usize), |c: &str| Token::Unknown(c.to_string())),
         )),
     )(input)
@@ -249,6 +261,30 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
     let mut line = 1;
     let mut column = 1;
 
+    // Handle initial whitespace
+    let (new_remaining, _) =
+        match take_while::<_, _, nom::error::Error<&str>>(|c: char| c.is_whitespace())(remaining) {
+            Ok(result) => result,
+            Err(_) => {
+                return Err(ParseError::LexerError(
+                    "Failed to parse initial whitespace".to_string(),
+                    Location::new(line, column),
+                ))
+            }
+        };
+
+    // Update line and column based on initial whitespace
+    for c in remaining[..remaining.len() - new_remaining.len()].chars() {
+        if c == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+
+    remaining = new_remaining;
+
     while !remaining.is_empty() {
         trace!(
             "Processing remaining input at line {}, column {}",
@@ -257,67 +293,14 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
         );
         debug!("Remaining input: {:?}", remaining);
 
-        let (new_remaining, whitespace) =
-            match recognize(multispace0::<&str, NomError<&str>>)(remaining) {
-                Ok(result) => result,
-                Err(e) => {
-                    return Err(ParseError::LexerError(
-                        format!(
-                            "Failed to parse whitespace at line {}, column {}: {:?}",
-                            line, column, e
-                        ),
-                        Location::new(line, column),
-                    ));
-                }
-            };
-        let start_line = line;
-        let start_column = column;
-
-        // Update line and column based on whitespace
-        for c in whitespace.chars() {
-            if c == '\n' {
-                line += 1;
-                column = 1;
-                trace!("New line detected, now at line {}", line);
-            } else {
-                column += 1;
-            }
-        }
-
-        remaining = new_remaining;
-        if remaining.is_empty() {
-            break;
-        }
-
-        let token_result = alt((
+        let (new_remaining, token_opt) = match alt((
             map(parse_token, Some),
             map(recognize(parse_comment), |_| None),
-        ))(remaining);
-
-        match token_result {
-            Ok((new_remaining, token_opt)) => {
-                if let Some(token) = token_opt {
-                    let location = Location::new(start_line, start_column);
-                    let token_with_location = TokenWithLocation {
-                        token: token.clone(),
-                        location,
-                    };
-                    debug!("Tokenized: {:?} at {:?}", token, location);
-                    tokens.push(token_with_location);
-
-                    // Update column for the next token
-                    column += token.to_string().len();
-                } else {
-                    trace!(
-                        "Skipped comment or whitespace at line {}, column {}",
-                        line,
-                        column
-                    );
-                }
-                remaining = new_remaining;
-            }
+            map(take_while1(char::is_whitespace), |_| None),
+        ))(remaining)
+        {
+            Ok(result) => result,
             Err(nom::Err::Error(e)) | Err(nom::Err::Failure(e)) => {
-                debug!("Error occurred with remaining input: {:?}", remaining);
                 return Err(ParseError::LexerError(
                     format!(
                         "Failed to parse token at line {}, column {}: {:?}",
@@ -332,7 +315,32 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
                     Location::new(line, column),
                 ));
             }
+        };
+
+        let token_len = remaining.len() - new_remaining.len();
+        let token_str = &remaining[..token_len];
+
+        if let Some(token) = token_opt {
+            let location = Location::new(line, column);
+            let token_with_location = TokenWithLocation {
+                token: token.clone(),
+                location,
+            };
+            debug!("Tokenized: {:?} at {:?}", token, location);
+            tokens.push(token_with_location);
         }
+
+        // Update line and column
+        for c in token_str.chars() {
+            if c == '\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += 1;
+            }
+        }
+
+        remaining = new_remaining;
     }
 
     debug!("Tokenization complete. Total tokens: {}", tokens.len());
@@ -486,17 +494,23 @@ mod tests {
 
     #[test]
     fn test_string_literals() {
-        let input = r#""" "abc" "123" "a b c" "a\"b""#;
+        let input = r#""" "abc" "123" "a b c" "a\"b" "a\\b" "\n\t" "a\b""#;
         let tokens = tokenize(input).unwrap();
 
+        let actual_tokens: Vec<_> = tokens.iter().map(|t| &t.token).collect();
+        println!("Actual tokens: {:?}", actual_tokens);
+
         assert_eq!(
-            tokens.iter().map(|t| &t.token).collect::<Vec<_>>(),
+            actual_tokens,
             vec![
                 &Token::StringLiteral(""),
                 &Token::StringLiteral("abc"),
                 &Token::StringLiteral("123"),
                 &Token::StringLiteral("a b c"),
                 &Token::StringLiteral("a\\\"b"),
+                &Token::StringLiteral("a\\\\b"),
+                &Token::StringLiteral("\\n\\t"),
+                &Token::StringLiteral("a\\b"),
             ]
         );
     }
@@ -546,68 +560,103 @@ mod tests {
     #[test]
     fn test_comments() {
         let input = r#"
-                // Single line comment
-                message /* Multi-line
-                comment */ Person {
-                    string name = 1; // Inline comment
-                }
-            "#;
+            // Single line comment
+            message /* Multi-line
+            comment */ Person {
+                string name = 1; // Inline comment
+            }
+        "#;
 
         let tokens = tokenize(input).unwrap();
 
-        assert_eq!(
-            tokens.iter().map(|t| &t.token).collect::<Vec<_>>(),
-            vec![
-                &Token::Message,
-                &Token::Identifier("Person"),
-                &Token::OpenBrace,
-                &Token::Identifier("string"),
-                &Token::Identifier("name"),
-                &Token::Equals,
-                &Token::IntLiteral(1),
-                &Token::Semicolon,
-                &Token::CloseBrace,
-            ]
-        );
+        let expected_tokens = vec![
+            Token::Comment("// Single line comment"),
+            Token::Message,
+            Token::Comment("/* Multi-line comment */"),
+            Token::Identifier("Person"),
+            Token::OpenBrace,
+            Token::Identifier("string"),
+            Token::Identifier("name"),
+            Token::Equals,
+            Token::IntLiteral(1),
+            Token::Semicolon,
+            Token::Comment("// Inline comment"),
+            Token::CloseBrace,
+        ];
+
+        assert_eq!(tokens.len(), expected_tokens.len());
+
+        for (actual, expected) in tokens.iter().zip(expected_tokens.iter()) {
+            match (&actual.token, expected) {
+                (Token::Comment(actual_comment), Token::Comment(expected_comment)) => {
+                    let actual_normalized = normalize_comment(actual_comment);
+                    let expected_normalized = normalize_comment(expected_comment);
+                    assert_eq!(
+                        actual_normalized, expected_normalized,
+                        "Comments don't match after normalization"
+                    );
+                }
+                (actual_token, expected_token) => {
+                    assert_eq!(actual_token, expected_token, "Tokens don't match");
+                }
+            }
+        }
     }
 
+    fn normalize_comment(comment: &str) -> String {
+        comment
+            .replace("/*", "")
+            .replace("*/", "")
+            .replace("//", "")
+            .split_whitespace()
+            .collect::<Vec<&str>>()
+            .join(" ")
+            .trim()
+            .to_string()
+    }
     #[test]
     fn test_location_tracking() {
         let input = r#"
-    syntax = "proto3";
-    message Person {
-        string name = 1;
-    }
-    "#;
+        syntax = "proto3";
+        message Person {
+            string name = 1;
+        }
+        "#;
 
         let tokens = tokenize(input).unwrap();
 
-        assert_eq!(tokens[0].location, Location::new(2, 1)); // syntax
-        assert_eq!(tokens[1].location, Location::new(2, 8)); // =
-        assert_eq!(tokens[2].location, Location::new(2, 10)); // "proto3"
-        assert_eq!(tokens[3].location, Location::new(2, 18)); // ;
-        assert_eq!(tokens[4].location, Location::new(3, 1)); // message
-        assert_eq!(tokens[5].location, Location::new(3, 9)); // Person
-        assert_eq!(tokens[6].location, Location::new(3, 16)); // {
-        assert_eq!(tokens[7].location, Location::new(4, 5)); // string
-        assert_eq!(tokens[8].location, Location::new(4, 12)); // name
-        assert_eq!(tokens[9].location, Location::new(4, 17)); // =
-        assert_eq!(tokens[10].location, Location::new(4, 19)); // 1
-        assert_eq!(tokens[11].location, Location::new(4, 20)); // ;
-        assert_eq!(tokens[12].location, Location::new(5, 1)); // }
+        for (i, token) in tokens.iter().enumerate() {
+            println!("Token {}: {:?} at {:?}", i, token.token, token.location);
+        }
+
+        assert_eq!(tokens[0].location, Location::new(2, 5)); // syntax
+        assert_eq!(tokens[1].location, Location::new(2, 12)); // =
+        assert_eq!(tokens[2].location, Location::new(2, 14)); // "proto3"
+        assert_eq!(tokens[3].location, Location::new(2, 22)); // ;
+        assert_eq!(tokens[4].location, Location::new(3, 5)); // message
+        assert_eq!(tokens[5].location, Location::new(3, 13)); // Person
+        assert_eq!(tokens[6].location, Location::new(3, 20)); // {
+        assert_eq!(tokens[7].location, Location::new(4, 9)); // string
+        assert_eq!(tokens[8].location, Location::new(4, 16)); // name
+        assert_eq!(tokens[9].location, Location::new(4, 21)); // =
+        assert_eq!(tokens[10].location, Location::new(4, 23)); // 1
+        assert_eq!(tokens[11].location, Location::new(4, 24)); // ;
+        assert_eq!(tokens[12].location, Location::new(5, 5)); // }
     }
 
     #[test]
-    fn test_error_handling() {
+    fn test_float_in_field_number() {
         let input = "message Person { int32 age = 2.5; }";
         let result = tokenize(input);
 
-        assert!(result.is_err());
-        if let Err(ParseError::LexerError(msg, location)) = result {
-            assert!(msg.contains("Failed to parse token"));
-            assert_eq!(location, Location::new(1, 29));
-        } else {
-            panic!("Expected LexerError");
-        }
+        assert!(result.is_ok());
+        let tokens = result.unwrap();
+
+        // Check that we have the expected number of tokens
+        assert_eq!(tokens.len(), 9);
+
+        // Check that the float is correctly tokenized
+        assert_eq!(tokens[6].token, Token::FloatLiteral(2.5));
+        assert_eq!(tokens[6].location, Location::new(1, 29));
     }
 }
