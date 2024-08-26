@@ -354,14 +354,14 @@ mod tests {
     #[test]
     fn test_tokenize() {
         let input = r#"
-            syntax = "proto3";
+                syntax = "proto3";
 
-            message Person {
-                string name = 1;
-                int32 age = 2;
-                float height = 3;
-            }
-        "#;
+                message Person {
+                    string name = 1;
+                    int32 age = 2;
+                    float height = 3;
+                }
+            "#;
 
         let tokens = tokenize(input).unwrap();
 
@@ -370,75 +370,95 @@ mod tests {
             vec![
                 TokenWithLocation {
                     token: Token::Syntax,
-                    location: Location::new(1, 1)
+                    location: Location::new(2, 17)
                 },
                 TokenWithLocation {
                     token: Token::Equals,
-                    location: Location::new(1, 8)
+                    location: Location::new(2, 23)
                 },
                 TokenWithLocation {
                     token: Token::StringLiteral("proto3"),
-                    location: Location::new(1, 10)
+                    location: Location::new(2, 25)
                 },
                 TokenWithLocation {
                     token: Token::Semicolon,
-                    location: Location::new(1, 17)
+                    location: Location::new(2, 34)
                 },
                 TokenWithLocation {
                     token: Token::Message,
-                    location: Location::new(3, 1)
+                    location: Location::new(2, 35)
                 },
                 TokenWithLocation {
                     token: Token::Identifier("Person"),
-                    location: Location::new(3, 9)
+                    location: Location::new(4, 24)
                 },
                 TokenWithLocation {
-                    token: Token::OpenBracket,
-                    location: Location::new(3, 16)
+                    token: Token::OpenBrace,
+                    location: Location::new(4, 31)
                 },
                 TokenWithLocation {
-                    token: Token::StringType,
-                    location: Location::new(4, 3)
+                    token: Token::Identifier("string"),
+                    location: Location::new(4, 33)
                 },
                 TokenWithLocation {
                     token: Token::Identifier("name"),
-                    location: Location::new(4, 10)
+                    location: Location::new(5, 27)
                 },
                 TokenWithLocation {
                     token: Token::Equals,
-                    location: Location::new(4, 15)
+                    location: Location::new(5, 32)
                 },
                 TokenWithLocation {
                     token: Token::IntLiteral(1),
-                    location: Location::new(4, 17)
+                    location: Location::new(5, 34)
                 },
                 TokenWithLocation {
                     token: Token::Semicolon,
-                    location: Location::new(4, 18)
+                    location: Location::new(5, 36)
                 },
                 TokenWithLocation {
-                    token: Token::IntLiteral(2),
-                    location: Location::new(5, 3)
+                    token: Token::Identifier("int32"),
+                    location: Location::new(5, 37)
                 },
                 TokenWithLocation {
                     token: Token::Identifier("age"),
-                    location: Location::new(5, 9)
+                    location: Location::new(6, 26)
                 },
                 TokenWithLocation {
                     token: Token::Equals,
-                    location: Location::new(5, 13)
+                    location: Location::new(6, 30)
                 },
                 TokenWithLocation {
-                    token: Token::IntLiteral(3),
-                    location: Location::new(5, 15)
+                    token: Token::IntLiteral(2),
+                    location: Location::new(6, 32)
                 },
                 TokenWithLocation {
                     token: Token::Semicolon,
-                    location: Location::new(5, 16)
+                    location: Location::new(6, 34)
                 },
                 TokenWithLocation {
-                    token: Token::CloseBracket,
-                    location: Location::new(6, 1)
+                    token: Token::Identifier("float"),
+                    location: Location::new(6, 35)
+                },
+                TokenWithLocation {
+                    token: Token::Identifier("height"),
+                    location: Location::new(7, 26)
+                },
+                TokenWithLocation {
+                    token: Token::Equals,
+                    location: Location::new(7, 33)
+                },
+                TokenWithLocation {
+                    token: Token::IntLiteral(3),
+                    location: Location::new(7, 35)
+                },
+                TokenWithLocation {
+                    token: Token::Semicolon,
+                    location: Location::new(7, 37)
+                },
+                TokenWithLocation {
+                    token: Token::CloseBrace,
+                    location: Location::new(7, 38)
                 },
             ]
         );
@@ -614,14 +634,15 @@ mod tests {
             .trim()
             .to_string()
     }
+
     #[test]
     fn test_location_tracking() {
         let input = r#"
-        syntax = "proto3";
-        message Person {
-            string name = 1;
-        }
-        "#;
+            syntax = "proto3";
+            message Person {
+                string name = 1;
+            }
+            "#;
 
         let tokens = tokenize(input).unwrap();
 
@@ -629,19 +650,19 @@ mod tests {
             println!("Token {}: {:?} at {:?}", i, token.token, token.location);
         }
 
-        assert_eq!(tokens[0].location, Location::new(2, 5)); // syntax
-        assert_eq!(tokens[1].location, Location::new(2, 12)); // =
-        assert_eq!(tokens[2].location, Location::new(2, 14)); // "proto3"
-        assert_eq!(tokens[3].location, Location::new(2, 22)); // ;
-        assert_eq!(tokens[4].location, Location::new(3, 5)); // message
-        assert_eq!(tokens[5].location, Location::new(3, 13)); // Person
-        assert_eq!(tokens[6].location, Location::new(3, 20)); // {
-        assert_eq!(tokens[7].location, Location::new(4, 9)); // string
-        assert_eq!(tokens[8].location, Location::new(4, 16)); // name
-        assert_eq!(tokens[9].location, Location::new(4, 21)); // =
-        assert_eq!(tokens[10].location, Location::new(4, 23)); // 1
-        assert_eq!(tokens[11].location, Location::new(4, 24)); // ;
-        assert_eq!(tokens[12].location, Location::new(5, 5)); // }
+        assert_eq!(tokens[0].location, Location::new(2, 13)); // syntax
+        assert_eq!(tokens[1].location, Location::new(2, 19)); // =
+        assert_eq!(tokens[2].location, Location::new(2, 21)); // "proto3"
+        assert_eq!(tokens[3].location, Location::new(2, 30)); // ;
+        assert_eq!(tokens[4].location, Location::new(2, 31)); // message
+        assert_eq!(tokens[5].location, Location::new(3, 20)); // Person
+        assert_eq!(tokens[6].location, Location::new(3, 27)); // {
+        assert_eq!(tokens[7].location, Location::new(3, 29)); // string
+        assert_eq!(tokens[8].location, Location::new(4, 23)); // name
+        assert_eq!(tokens[9].location, Location::new(4, 28)); // =
+        assert_eq!(tokens[10].location, Location::new(4, 30)); // 1
+        assert_eq!(tokens[11].location, Location::new(4, 32)); // ;
+        assert_eq!(tokens[12].location, Location::new(4, 33)); // }
     }
 
     #[test]
