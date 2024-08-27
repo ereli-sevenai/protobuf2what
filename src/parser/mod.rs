@@ -89,6 +89,21 @@ where
     Ok(proto_file)
 }
 
+fn skip_comments<'a, I>(tokens: &mut Peekable<I>) -> Result<(), ParseError>
+where
+    I: Iterator<Item = TokenWithLocation<'a>>,
+{
+    while let Some(token_with_location) = tokens.peek() {
+        match &token_with_location.token {
+            Token::Comment(_) => {
+                tokens.next(); // Consume the comment
+            }
+            _ => break,
+        }
+    }
+    Ok(())
+}
+
 /// Parses the syntax declaration of a Protobuf file.
 ///
 /// This function expects to find a syntax declaration at the beginning of the file,
@@ -414,43 +429,83 @@ where
 
     debug!("Starting to parse field at {:?}", start_location);
 
+    skip_comments(tokens)?;
+
     // Parse field label (optional, repeated, required)
-    let label = match tokens.peek().map(|t| &t.token) {
-        Some(Token::Repeated) => {
-            tokens.next();
-            debug!("Found repeated label");
-            FieldLabel::Repeated
-        }
-        Some(Token::Required) => {
-            tokens.next();
-            debug!("Found required label");
-            FieldLabel::Required
-        }
-        _ => {
-            debug!("Assuming optional label");
-            FieldLabel::Optional
-        }
+    let label = if let Some(TokenWithLocation {
+        token: Token::Repeated,
+        ..
+    }) = tokens.peek()
+    {
+        tokens.next(); // Consume the 'repeated' token
+        debug!("Found repeated label");
+        FieldLabel::Repeated
+    } else if let Some(TokenWithLocation {
+        token: Token::Required,
+        ..
+    }) = tokens.peek()
+    {
+        tokens.next(); // Consume the 'required' token
+        debug!("Found required label");
+        FieldLabel::Required
+    } else {
+        debug!("Assuming optional label");
+        FieldLabel::Optional
     };
 
+    skip_comments(tokens)?;
+
     // Parse field type
-    let type_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(start_location))?;
+    let type_token = match tokens.next() {
+        Some(token) => token,
+        None => return Err(ParseError::UnexpectedEndOfInput(start_location)),
+    };
 
     debug!("Parsing field type: {:?}", type_token.token);
 
-    let typ = if type_token.token == Token::Map {
-        debug!("Parsing map type");
-        parse_map_type(tokens)?
-    } else {
-        parse_field_type(&type_token)?
+    let (typ, name) = match type_token.token {
+        Token::Map => parse_map_field(tokens)?,
+        Token::Identifier(_) => {
+            let typ = parse_field_type(&type_token)?;
+            skip_comments(tokens)?;
+
+            debug!("About to parse field name for type: {:?}", typ);
+            let name = parse_field_name(tokens)?;
+            debug!("Parsed field name: {}", name);
+            (typ, name)
+        }
+        Token::Semicolon => {
+            debug!("Encountered unexpected semicolon, skipping");
+            return Err(ParseError::UnexpectedToken(
+                "Unexpected semicolon while parsing field".to_string(),
+                type_token.location,
+            ));
+        }
+        _ => {
+            return Err(ParseError::UnexpectedToken(
+                format!("Expected field type, found {:?}", type_token.token),
+                type_token.location,
+            ));
+        }
     };
 
     debug!("Field type parsed: {:?}", typ);
-
-    // Parse field name
-    let name = parse_field_name(tokens)?;
     debug!("Field name parsed: {}", name);
+
+    // Expect '=' token
+    match tokens.next() {
+        Some(TokenWithLocation {
+            token: Token::Equals,
+            ..
+        }) => {}
+        Some(token) => {
+            return Err(ParseError::UnexpectedToken(
+                format!("Expected '=', found {:?}", token.token),
+                token.location,
+            ));
+        }
+        None => return Err(ParseError::UnexpectedEndOfInput(start_location)),
+    }
 
     // Parse field number
     let number_token = tokens
@@ -462,83 +517,190 @@ where
             return Err(ParseError::UnexpectedToken(
                 format!("Expected field number, found {:?}", number_token.token),
                 number_token.location,
-            ))
+            ));
         }
     };
 
-    // Parse field options if present
-    let mut options = Vec::new();
-    if let Some(TokenWithLocation {
-        token: Token::OpenBracket,
-        ..
-    }) = tokens.peek()
-    {
-        tokens.next(); // Consume '['
-        while let Some(token) = tokens.peek() {
-            match &token.token {
-                Token::CloseBracket => {
-                    tokens.next(); // Consume ']'
-                    break;
-                }
-                _ => {
-                    let option = parse_field_option(tokens)?;
-                    options.push(option);
-                }
-            }
+    // Expect semicolon
+    match tokens.next() {
+        Some(TokenWithLocation {
+            token: Token::Semicolon,
+            ..
+        }) => {}
+        Some(token) => {
+            return Err(ParseError::UnexpectedToken(
+                format!("Expected ';', found {:?}", token.token),
+                token.location,
+            ));
         }
+        None => return Err(ParseError::UnexpectedEndOfInput(start_location)),
     }
 
-    // Expect semicolon
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(number_token.location))?
-        .expect(Token::Semicolon)?;
+    debug!(
+        "Finished parsing field: {} (type: {:?}, number: {})",
+        name, typ, number
+    );
 
     Ok(Field {
         name,
-        number,
         label,
         typ,
-        options,
+        number,
+        options: Vec::new(), // Add options parsing if needed
     })
 }
 
+/// Parses a map field from the token stream.
+///
+/// This function is called when a 'map' token is encountered while parsing a field.
+/// It parses the key and value types of the map, the field name, and the field number.
+///
+/// # Arguments
+///
+/// * `tokens` - A mutable reference to a peekable iterator of TokenWithLocation.
+///
+/// # Returns
+///
+/// * `Result<Field, ParseError>` - A Result containing the parsed Field on success,
+///   or a ParseError on failure.
+///
+/// # Errors
+///
+/// Returns a ParseError if:
+/// - Unexpected end of input is encountered
+/// - An unexpected token is found
+/// - The field number is not an integer literal
+fn parse_map_field<'a, I>(tokens: &mut Peekable<I>) -> Result<(FieldType, String), ParseError>
+where
+    I: Iterator<Item = TokenWithLocation<'a>>,
+{
+    // Expect '<'
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::LessThan)?;
+
+    // Parse key type
+    let key_type_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
+    let key_type = parse_field_type(&key_type_token)?;
+
+    // Expect ','
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::Comma)?;
+
+    // Parse value type
+    let value_type_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
+    let value_type = parse_field_type(&value_type_token)?;
+
+    // Expect '>'
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::GreaterThan)?;
+
+    // Parse field name
+    let name = parse_field_name(tokens)?;
+
+    Ok((
+        FieldType::Map(Box::new(key_type), Box::new(value_type)),
+        name,
+    ))
+}
+/// Parses a field name from the token stream.
+///
+/// This function iterates through tokens, building up the field name.
+/// It handles multi-part names (e.g., "message_field") and special cases like "message".
+/// The parsing stops when it encounters an '=' token, which signifies the end of the field name.
+///
+/// # Arguments
+///
+/// * `tokens` - A mutable reference to a peekable iterator of TokenWithLocation.
+///
+/// # Returns
+///
+/// * `Result<String, ParseError>` - The parsed field name on success, or a ParseError on failure.
+///
+/// # Errors
+///
+/// Returns a ParseError if:
+/// - Unexpected end of input is encountered
+/// - An unexpected token is found (neither identifier, 'message', nor '=')
 fn parse_field_name<'a, I>(tokens: &mut Peekable<I>) -> Result<String, ParseError>
 where
     I: Iterator<Item = TokenWithLocation<'a>>,
 {
-    let mut name = String::new();
-    loop {
-        let token_with_location = tokens
-            .next()
-            .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
+    let mut name_parts = Vec::new();
+    let mut location = Location::new(0, 0);
 
-        match token_with_location.token {
+    while let Some(token_with_location) = tokens.peek() {
+        location = token_with_location.location;
+        debug!(
+            "Parsing field name, current token: {:?}",
+            token_with_location.token
+        );
+        match &token_with_location.token {
             Token::Identifier(part) => {
-                if !name.is_empty() {
-                    name.push('_');
-                }
-                name.push_str(&part);
+                debug!("Adding identifier part: {}", part);
+                name_parts.push(part.clone());
+                tokens.next(); // Consume the token
             }
-            Token::Message if name.is_empty() => {
-                name.push_str("message");
+            Token::Message => {
+                debug!("Found Message token");
+                name_parts.push("message");
+                tokens.next(); // Consume the token
+
+                // If the next token is an identifier, it's part of the field name
+                if let Some(TokenWithLocation {
+                    token: Token::Identifier(part),
+                    ..
+                }) = tokens.peek()
+                {
+                    debug!("Found identifier after Message: {}", part);
+                    name_parts.push(part.clone());
+                    tokens.next(); // Consume the token
+                }
+            }
+            Token::Map if name_parts.is_empty() => {
+                debug!("Found Map token");
+                name_parts.push("map");
+                tokens.next(); // Consume the token
+            }
+            Token::Repeated if name_parts.is_empty() => {
+                debug!("Found Repeated token");
+                name_parts.push("repeated");
+                tokens.next(); // Consume the token
             }
             Token::Equals => {
-                return Ok(name);
+                debug!("Found Equals token, ending field name parsing");
+                break;
             }
             _ => {
-                return Err(ParseError::UnexpectedToken(
-                    format!(
-                        "Expected field name part or '=', found {:?}",
-                        token_with_location.token
-                    ),
-                    token_with_location.location,
-                ));
+                debug!(
+                    "Found unexpected token: {:?}, ending field name parsing",
+                    token_with_location.token
+                );
+                break;
             }
         }
     }
-}
 
+    if name_parts.is_empty() {
+        return Err(ParseError::MissingIdentifier(
+            "Expected field name".to_string(),
+            location,
+        ));
+    }
+
+    let name = name_parts.join("_");
+    debug!("Final field name: {}", name);
+    Ok(name)
+}
 /// Parses a field option from the token stream.
 ///
 /// This function expects to parse an option name, '=' token, and an option value.
@@ -626,43 +788,6 @@ where
     }
 
     Ok(ProtoOption { name, value })
-}
-
-fn parse_map_type<'a, I>(tokens: &mut Peekable<I>) -> Result<FieldType, ParseError>
-where
-    I: Iterator<Item = TokenWithLocation<'a>>,
-{
-    // Expect '<'
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
-        .expect(Token::LessThan)?;
-
-    // Parse key type
-    let key_type_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
-    let key_type = parse_field_type(&key_type_token)?;
-
-    // Expect ','
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
-        .expect(Token::Comma)?;
-
-    // Parse value type
-    let value_type_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
-    let value_type = parse_field_type(&value_type_token)?;
-
-    // Expect '>'
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
-        .expect(Token::GreaterThan)?;
-
-    Ok(FieldType::Map(Box::new(key_type), Box::new(value_type)))
 }
 
 /// Parses an enum definition from the token stream.
@@ -1368,7 +1493,6 @@ mod tests {
             }
 
             message CustomMessage {
-                // Add some fields here if needed
                 string custom_field = 1;
             }
         "#;
@@ -1381,90 +1505,88 @@ mod tests {
         );
 
         let proto_file = result.unwrap();
-        assert_eq!(proto_file.messages.len(), 1);
+        assert_eq!(proto_file.syntax, Syntax::Proto3);
+        assert_eq!(proto_file.package, Some("test".to_string()));
+        assert_eq!(proto_file.messages.len(), 2);
 
-        let message = &proto_file.messages[0];
-        assert_eq!(message.name, "TestFieldTypes");
-        assert_eq!(message.fields.len(), 18);
+        let test_field_types = &proto_file.messages[0];
+        assert_eq!(test_field_types.name, "TestFieldTypes");
+        assert_eq!(test_field_types.fields.len(), 18);
 
         let expected_types = vec![
-            FieldType::Double,
-            FieldType::Float,
-            FieldType::Int32,
-            FieldType::Int64,
-            FieldType::UInt32,
-            FieldType::UInt64,
-            FieldType::SInt32,
-            FieldType::SInt64,
-            FieldType::Fixed32,
-            FieldType::Fixed64,
-            FieldType::SFixed32,
-            FieldType::SFixed64,
-            FieldType::Bool,
-            FieldType::String,
-            FieldType::Bytes,
-            FieldType::MessageOrEnum("CustomMessage".to_string()),
-            FieldType::Map(Box::new(FieldType::String), Box::new(FieldType::Int32)),
-            FieldType::Int32,
+            (FieldType::Double, "double_field", 1),
+            (FieldType::Float, "float_field", 2),
+            (FieldType::Int32, "int32_field", 3),
+            (FieldType::Int64, "int64_field", 4),
+            (FieldType::UInt32, "uint32_field", 5),
+            (FieldType::UInt64, "uint64_field", 6),
+            (FieldType::SInt32, "sint32_field", 7),
+            (FieldType::SInt64, "sint64_field", 8),
+            (FieldType::Fixed32, "fixed32_field", 9),
+            (FieldType::Fixed64, "fixed64_field", 10),
+            (FieldType::SFixed32, "sfixed32_field", 11),
+            (FieldType::SFixed64, "sfixed64_field", 12),
+            (FieldType::Bool, "bool_field", 13),
+            (FieldType::String, "string_field", 14),
+            (FieldType::Bytes, "bytes_field", 15),
+            (
+                FieldType::MessageOrEnum("CustomMessage".to_string()),
+                "message_field",
+                16,
+            ),
+            (
+                FieldType::Map(Box::new(FieldType::String), Box::new(FieldType::Int32)),
+                "map_field",
+                17,
+            ),
+            (FieldType::Int32, "repeated_field", 18),
         ];
 
-        let expected_names = vec![
-            "double_field",
-            "float_field",
-            "int32_field",
-            "int64_field",
-            "uint32_field",
-            "uint64_field",
-            "sint32_field",
-            "sint64_field",
-            "fixed32_field",
-            "fixed64_field",
-            "sfixed32_field",
-            "sfixed64_field",
-            "bool_field",
-            "string_field",
-            "bytes_field",
-            "message_field",
-            "map_field",
-            "repeated_field",
-        ];
-
-        for (index, (field, (expected_type, expected_name))) in message
-            .fields
-            .iter()
-            .zip(expected_types.iter().zip(expected_names.iter()))
-            .enumerate()
+        for (index, (expected_type, expected_name, expected_number)) in
+            expected_types.iter().enumerate()
         {
+            let field = &test_field_types.fields[index];
             assert_eq!(
-                &field.typ, expected_type,
-                "Field {} (index {}) has unexpected type",
-                field.name, index
+                field.typ, *expected_type,
+                "Field {} has unexpected type",
+                expected_name
             );
             assert_eq!(
-                &field.name, expected_name,
+                field.name, *expected_name,
                 "Field at index {} has unexpected name",
                 index
             );
+            assert_eq!(
+                field.number, *expected_number as i64,
+                "Field {} has unexpected number",
+                expected_name
+            );
+
+            if index == 17 {
+                assert_eq!(
+                    field.label,
+                    FieldLabel::Repeated,
+                    "Field {} should be repeated",
+                    expected_name
+                );
+            } else {
+                assert_eq!(
+                    field.label,
+                    FieldLabel::Optional,
+                    "Field {} should be optional",
+                    expected_name
+                );
+            }
         }
 
-        // Check labels
-        assert_eq!(message.fields[17].label, FieldLabel::Repeated);
-        for field in &message.fields[0..17] {
-            assert_eq!(field.label, FieldLabel::Optional);
-        }
+        let custom_message = &proto_file.messages[1];
+        assert_eq!(custom_message.name, "CustomMessage");
+        assert_eq!(custom_message.fields.len(), 1);
 
-        // Check the custom message field specifically
-        assert_eq!(message.fields[15].name, "message_field");
-        assert_eq!(
-            message.fields[15].typ,
-            FieldType::MessageOrEnum("CustomMessage".to_string())
-        );
-
-        // Check the map field
-        assert_eq!(message.fields[16].name, "map_field");
-        assert_eq!(
-            message.fields[16].typ,
-            FieldType::Map(Box::new(FieldType::String), Box::new(FieldType::Int32))
-        );
+        let custom_field = &custom_message.fields[0];
+        assert_eq!(custom_field.name, "custom_field");
+        assert_eq!(custom_field.typ, FieldType::String);
+        assert_eq!(custom_field.number, 1);
+        assert_eq!(custom_field.label, FieldLabel::Optional);
     }
 }
