@@ -217,6 +217,21 @@ where
     Ok(())
 }
 
+/// Parses an import statement from the token stream.
+///
+/// This function expects to find an import declaration in the token stream.
+/// It consumes the 'import' keyword, parses the optional import kind (weak or public),
+/// and then parses the import path as a string literal. It updates the ProtoFile
+/// struct with the parsed import information.
+///
+/// # Arguments
+///
+/// * `tokens` - A mutable reference to a peekable iterator of TokenWithLocation.
+/// * `proto_file` - A mutable reference to the ProtoFile being constructed.
+///
+/// # Returns
+///
+/// * `Result<(), ParseError>` - Ok(()) if parsing succeeds, or a ParseError if any issues occur.
 fn parse_import<'a, I>(
     tokens: &mut Peekable<I>,
     proto_file: &mut ProtoFile,
@@ -300,29 +315,47 @@ where
     // Expect 'message' keyword
     let message_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
-        .expect(Token::Message)?;
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
 
-    // Parse message name
+    match &message_token.token {
+        Token::Identifier(s) if s.to_string() == "message" => {
+            // This is the 'message' keyword
+        }
+        Token::Message => {
+            // If you have a specific Message token, handle it here
+        }
+        _ => {
+            return Err(ParseError::UnexpectedToken(
+                format!("Expected 'message', found {:?}", message_token.token),
+                message_token.location,
+            ));
+        }
+    }
+
+    // Expect message name
     let name_token = tokens
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(message_token.location))?;
-
-    let name = match name_token.token {
-        Token::Identifier(name) => name.to_string(),
+    let name = match &name_token.token {
+        Token::Identifier(s) => s.to_string(),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected message name, found {:?}", name_token.token),
                 name_token.location,
-            ))
+            ));
         }
     };
 
     // Expect opening brace
     let open_brace_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
-        .expect(Token::OpenBrace)?;
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?;
+    if open_brace_token.token != Token::OpenBrace {
+        return Err(ParseError::UnexpectedToken(
+            format!("Expected '{{', found {:?}", open_brace_token.token),
+            open_brace_token.location,
+        ));
+    }
 
     let mut message = Message::new(name);
 
@@ -356,7 +389,6 @@ where
 
     Err(ParseError::UnexpectedEndOfInput(open_brace_token.location))
 }
-
 /// Parses a message definition from the token stream.
 ///
 /// This function expects the 'message' keyword to have already been consumed.
@@ -417,31 +449,13 @@ where
     debug!("Field type parsed: {:?}", typ);
 
     // Parse field name
-    let name_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(type_token.location))?;
-    debug!("Parsing field name: {:?}", name_token.token);
-    let name = match name_token.token {
-        Token::Identifier(name) => name.to_string(),
-        _ => {
-            return Err(ParseError::UnexpectedToken(
-                format!("Expected field name, found {:?}", name_token.token),
-                name_token.location,
-            ))
-        }
-    };
+    let name = parse_field_name(tokens)?;
     debug!("Field name parsed: {}", name);
-
-    // Expect '='
-    let equals_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
-        .expect(Token::Equals)?;
 
     // Parse field number
     let number_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(equals_token.location))?;
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(start_location))?;
     let number = match number_token.token {
         Token::IntLiteral(num) => num,
         _ => {
@@ -451,6 +465,28 @@ where
             ))
         }
     };
+
+    // Parse field options if present
+    let mut options = Vec::new();
+    if let Some(TokenWithLocation {
+        token: Token::OpenBracket,
+        ..
+    }) = tokens.peek()
+    {
+        tokens.next(); // Consume '['
+        while let Some(token) = tokens.peek() {
+            match &token.token {
+                Token::CloseBracket => {
+                    tokens.next(); // Consume ']'
+                    break;
+                }
+                _ => {
+                    let option = parse_field_option(tokens)?;
+                    options.push(option);
+                }
+            }
+        }
+    }
 
     // Expect semicolon
     tokens
@@ -463,8 +499,133 @@ where
         number,
         label,
         typ,
-        options: Vec::new(), // TODO: Parse field options
+        options,
     })
+}
+
+fn parse_field_name<'a, I>(tokens: &mut Peekable<I>) -> Result<String, ParseError>
+where
+    I: Iterator<Item = TokenWithLocation<'a>>,
+{
+    let mut name = String::new();
+    loop {
+        let token_with_location = tokens
+            .next()
+            .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
+
+        match token_with_location.token {
+            Token::Identifier(part) => {
+                if !name.is_empty() {
+                    name.push('_');
+                }
+                name.push_str(&part);
+            }
+            Token::Message if name.is_empty() => {
+                name.push_str("message");
+            }
+            Token::Equals => {
+                return Ok(name);
+            }
+            _ => {
+                return Err(ParseError::UnexpectedToken(
+                    format!(
+                        "Expected field name part or '=', found {:?}",
+                        token_with_location.token
+                    ),
+                    token_with_location.location,
+                ));
+            }
+        }
+    }
+}
+
+/// Parses a field option from the token stream.
+///
+/// This function expects to parse an option name, '=' token, and an option value.
+/// It handles various types of option values including string literals, integer literals,
+/// float literals, and identifiers (which may represent booleans or custom identifiers).
+///
+/// # Arguments
+///
+/// * `tokens` - A mutable reference to a peekable iterator of TokenWithLocation.
+///
+/// # Returns
+///
+/// * `Result<ProtoOption, ParseError>` - A Result containing the parsed ProtoOption on success,
+///   or a ParseError on failure.
+fn parse_field_option<'a, I>(tokens: &mut Peekable<I>) -> Result<ProtoOption, ParseError>
+where
+    I: Iterator<Item = TokenWithLocation<'a>>,
+{
+    // Parse option name
+    let name_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
+    let name = match &name_token.token {
+        Token::Identifier(name) => name.to_string(),
+        _ => {
+            return Err(ParseError::UnexpectedToken(
+                format!("Expected option name, found {:?}", name_token.token),
+                name_token.location,
+            ))
+        }
+    };
+
+    // Expect '='
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
+        .expect(Token::Equals)?;
+
+    // Parse option value
+    let value_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?;
+    let value = match &value_token.token {
+        Token::StringLiteral(s) => OptionValue::String((*s).to_string()),
+        Token::IntLiteral(i) => OptionValue::Int(*i as i64),
+        Token::FloatLiteral(f) => OptionValue::Float(*f),
+        Token::Identifier(id) => {
+            if id.to_string() == "true" {
+                OptionValue::Boolean(true)
+            } else if id.to_string() == "false" {
+                OptionValue::Boolean(false)
+            } else {
+                OptionValue::Identifier(id.to_string())
+            }
+        }
+        _ => {
+            return Err(ParseError::UnexpectedToken(
+                format!("Expected option value, found {:?}", value_token.token),
+                value_token.location,
+            ))
+        }
+    };
+
+    // Check for comma or closing bracket
+    match tokens.peek() {
+        Some(TokenWithLocation {
+            token: Token::Comma,
+            ..
+        }) => {
+            tokens.next(); // Consume comma
+        }
+        Some(TokenWithLocation {
+            token: Token::CloseBracket,
+            ..
+        }) => {
+            // Don't consume closing bracket, it will be handled in parse_field
+        }
+        Some(t) => {
+            return Err(ParseError::UnexpectedToken(
+                format!("Expected ',' or ']', found {:?}", t.token),
+                t.location,
+            ))
+        }
+        None => return Err(ParseError::UnexpectedEndOfInput(value_token.location)),
+    }
+
+    Ok(ProtoOption { name, value })
 }
 
 fn parse_map_type<'a, I>(tokens: &mut Peekable<I>) -> Result<FieldType, ParseError>
@@ -1182,6 +1343,9 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let input = r#"
+            syntax = "proto3";
+            package test;
+
             message TestFieldTypes {
                 double double_field = 1;
                 float float_field = 2;
@@ -1202,12 +1366,14 @@ mod tests {
                 map<string, int32> map_field = 17;
                 repeated int32 repeated_field = 18;
             }
+
+            message CustomMessage {
+                // Add some fields here if needed
+                string custom_field = 1;
+            }
         "#;
 
         let result = parse_proto_file(input);
-        if let Err(ref e) = result {
-            eprintln!("Error: {:?}", e);
-        }
         assert!(
             result.is_ok(),
             "Failed to parse proto file: {:?}",
@@ -1242,11 +1408,42 @@ mod tests {
             FieldType::Int32,
         ];
 
-        for (field, expected_type) in message.fields.iter().zip(expected_types.iter()) {
+        let expected_names = vec![
+            "double_field",
+            "float_field",
+            "int32_field",
+            "int64_field",
+            "uint32_field",
+            "uint64_field",
+            "sint32_field",
+            "sint64_field",
+            "fixed32_field",
+            "fixed64_field",
+            "sfixed32_field",
+            "sfixed64_field",
+            "bool_field",
+            "string_field",
+            "bytes_field",
+            "message_field",
+            "map_field",
+            "repeated_field",
+        ];
+
+        for (index, (field, (expected_type, expected_name))) in message
+            .fields
+            .iter()
+            .zip(expected_types.iter().zip(expected_names.iter()))
+            .enumerate()
+        {
             assert_eq!(
                 &field.typ, expected_type,
-                "Field {} has unexpected type",
-                field.name
+                "Field {} (index {}) has unexpected type",
+                field.name, index
+            );
+            assert_eq!(
+                &field.name, expected_name,
+                "Field at index {} has unexpected name",
+                index
             );
         }
 
@@ -1255,5 +1452,19 @@ mod tests {
         for field in &message.fields[0..17] {
             assert_eq!(field.label, FieldLabel::Optional);
         }
+
+        // Check the custom message field specifically
+        assert_eq!(message.fields[15].name, "message_field");
+        assert_eq!(
+            message.fields[15].typ,
+            FieldType::MessageOrEnum("CustomMessage".to_string())
+        );
+
+        // Check the map field
+        assert_eq!(message.fields[16].name, "map_field");
+        assert_eq!(
+            message.fields[16].typ,
+            FieldType::Map(Box::new(FieldType::String), Box::new(FieldType::Int32))
+        );
     }
 }

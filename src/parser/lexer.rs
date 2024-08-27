@@ -160,7 +160,7 @@ fn parse_identifier(input: &str) -> IResult<&str, Token> {
             alt((alpha1, tag("_"))),
             many0(alt((alphanumeric1, tag("_")))),
         )),
-        Token::Identifier,
+        |s: &str| Token::Identifier(s),
     )(input)
 }
 

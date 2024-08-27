@@ -100,11 +100,6 @@ pub enum FieldType {
     Map(Box<FieldType>, Box<FieldType>),
 }
 
-pub struct FieldOptionValue {
-    pub name: String,
-    pub value: OptionValue,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct OneOf {
     pub name: String,
