@@ -128,11 +128,20 @@ where
     let syntax_token = tokens
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
-    if syntax_token.token != Token::Syntax {
-        return Err(ParseError::UnexpectedToken(
-            format!("Expected 'syntax', found {:?}", syntax_token.token),
-            syntax_token.location,
-        ));
+    match syntax_token.token {
+        Token::Identifier(s) if s == "syntax" => {
+            debug!("Found 'syntax' identifier");
+        }
+        Token::Syntax => {
+            debug!("Found 'syntax' token");
+        }
+        _ => {
+            debug!("Expected 'syntax', found {:?}", syntax_token.token);
+            return Err(ParseError::UnexpectedToken(
+                format!("Expected 'syntax', found {:?}", syntax_token.token),
+                syntax_token.location,
+            ));
+        }
     }
 
     // Expect '=' token
@@ -432,54 +441,46 @@ where
     skip_comments(tokens)?;
 
     // Parse field label (optional, repeated, required)
-    let label = if let Some(TokenWithLocation {
-        token: Token::Repeated,
-        ..
-    }) = tokens.peek()
-    {
-        tokens.next(); // Consume the 'repeated' token
-        debug!("Found repeated label");
-        FieldLabel::Repeated
-    } else if let Some(TokenWithLocation {
-        token: Token::Required,
-        ..
-    }) = tokens.peek()
-    {
-        tokens.next(); // Consume the 'required' token
-        debug!("Found required label");
-        FieldLabel::Required
-    } else {
-        debug!("Assuming optional label");
-        FieldLabel::Optional
+    let label = match tokens.peek() {
+        Some(TokenWithLocation {
+            token: Token::Repeated,
+            ..
+        }) => {
+            tokens.next(); // Consume 'repeated'
+            FieldLabel::Repeated
+        }
+        Some(TokenWithLocation {
+            token: Token::Required,
+            ..
+        }) => {
+            tokens.next(); // Consume 'required'
+            FieldLabel::Required
+        }
+        _ => FieldLabel::Optional,
     };
 
     skip_comments(tokens)?;
 
     // Parse field type
-    let type_token = match tokens.next() {
-        Some(token) => token,
-        None => return Err(ParseError::UnexpectedEndOfInput(start_location)),
-    };
+    let type_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(start_location))?;
 
     debug!("Parsing field type: {:?}", type_token.token);
 
     let (typ, name) = match type_token.token {
         Token::Map => parse_map_field(tokens)?,
+        Token::StringType => {
+            let typ = FieldType::String;
+            skip_comments(tokens)?;
+            let name = parse_field_name(tokens)?;
+            (typ, name)
+        }
         Token::Identifier(_) => {
             let typ = parse_field_type(&type_token)?;
             skip_comments(tokens)?;
-
-            debug!("About to parse field name for type: {:?}", typ);
             let name = parse_field_name(tokens)?;
-            debug!("Parsed field name: {}", name);
             (typ, name)
-        }
-        Token::Semicolon => {
-            debug!("Encountered unexpected semicolon, skipping");
-            return Err(ParseError::UnexpectedToken(
-                "Unexpected semicolon while parsing field".to_string(),
-                type_token.location,
-            ));
         }
         _ => {
             return Err(ParseError::UnexpectedToken(
@@ -488,7 +489,6 @@ where
             ));
         }
     };
-
     debug!("Field type parsed: {:?}", typ);
     debug!("Field name parsed: {}", name);
 
@@ -647,33 +647,28 @@ where
         match &token_with_location.token {
             Token::Identifier(part) => {
                 debug!("Adding identifier part: {}", part);
-                name_parts.push(part.clone());
+                // Split the identifier by underscores and add each part separately
+                for (i, subpart) in part.split('_').enumerate() {
+                    if i > 0 || !name_parts.is_empty() {
+                        name_parts.push("_".to_string());
+                    }
+                    name_parts.push(subpart.to_string());
+                }
                 tokens.next(); // Consume the token
             }
-            Token::Message => {
+            Token::Message if name_parts.is_empty() => {
                 debug!("Found Message token");
-                name_parts.push("message");
+                name_parts.push("message".to_string());
                 tokens.next(); // Consume the token
-
-                // If the next token is an identifier, it's part of the field name
-                if let Some(TokenWithLocation {
-                    token: Token::Identifier(part),
-                    ..
-                }) = tokens.peek()
-                {
-                    debug!("Found identifier after Message: {}", part);
-                    name_parts.push(part.clone());
-                    tokens.next(); // Consume the token
-                }
             }
             Token::Map if name_parts.is_empty() => {
                 debug!("Found Map token");
-                name_parts.push("map");
+                name_parts.push("map".to_string());
                 tokens.next(); // Consume the token
             }
             Token::Repeated if name_parts.is_empty() => {
                 debug!("Found Repeated token");
-                name_parts.push("repeated");
+                name_parts.push("repeated".to_string());
                 tokens.next(); // Consume the token
             }
             Token::Equals => {
@@ -697,97 +692,9 @@ where
         ));
     }
 
-    let name = name_parts.join("_");
+    let name = name_parts.join("");
     debug!("Final field name: {}", name);
     Ok(name)
-}
-/// Parses a field option from the token stream.
-///
-/// This function expects to parse an option name, '=' token, and an option value.
-/// It handles various types of option values including string literals, integer literals,
-/// float literals, and identifiers (which may represent booleans or custom identifiers).
-///
-/// # Arguments
-///
-/// * `tokens` - A mutable reference to a peekable iterator of TokenWithLocation.
-///
-/// # Returns
-///
-/// * `Result<ProtoOption, ParseError>` - A Result containing the parsed ProtoOption on success,
-///   or a ParseError on failure.
-fn parse_field_option<'a, I>(tokens: &mut Peekable<I>) -> Result<ProtoOption, ParseError>
-where
-    I: Iterator<Item = TokenWithLocation<'a>>,
-{
-    // Parse option name
-    let name_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
-    let name = match &name_token.token {
-        Token::Identifier(name) => name.to_string(),
-        _ => {
-            return Err(ParseError::UnexpectedToken(
-                format!("Expected option name, found {:?}", name_token.token),
-                name_token.location,
-            ))
-        }
-    };
-
-    // Expect '='
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
-        .expect(Token::Equals)?;
-
-    // Parse option value
-    let value_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?;
-    let value = match &value_token.token {
-        Token::StringLiteral(s) => OptionValue::String((*s).to_string()),
-        Token::IntLiteral(i) => OptionValue::Int(*i as i64),
-        Token::FloatLiteral(f) => OptionValue::Float(*f),
-        Token::Identifier(id) => {
-            if id.to_string() == "true" {
-                OptionValue::Boolean(true)
-            } else if id.to_string() == "false" {
-                OptionValue::Boolean(false)
-            } else {
-                OptionValue::Identifier(id.to_string())
-            }
-        }
-        _ => {
-            return Err(ParseError::UnexpectedToken(
-                format!("Expected option value, found {:?}", value_token.token),
-                value_token.location,
-            ))
-        }
-    };
-
-    // Check for comma or closing bracket
-    match tokens.peek() {
-        Some(TokenWithLocation {
-            token: Token::Comma,
-            ..
-        }) => {
-            tokens.next(); // Consume comma
-        }
-        Some(TokenWithLocation {
-            token: Token::CloseBracket,
-            ..
-        }) => {
-            // Don't consume closing bracket, it will be handled in parse_field
-        }
-        Some(t) => {
-            return Err(ParseError::UnexpectedToken(
-                format!("Expected ',' or ']', found {:?}", t.token),
-                t.location,
-            ))
-        }
-        None => return Err(ParseError::UnexpectedEndOfInput(value_token.location)),
-    }
-
-    Ok(ProtoOption { name, value })
 }
 
 /// Parses an enum definition from the token stream.
@@ -1194,6 +1101,14 @@ fn parse_field_type(token: &TokenWithLocation) -> Result<FieldType, ParseError> 
             "bytes" => Ok(FieldType::Bytes),
             _ => Ok(FieldType::MessageOrEnum(typ.to_string())),
         },
+        Token::StringType => Ok(FieldType::String),
+        Token::Map => {
+            // Parse map key and value types
+            Err(ParseError::UnexpectedToken(
+                "Map types should be handled in parse_map_field".to_string(),
+                token.location,
+            ))
+        }
         _ => Err(ParseError::UnexpectedToken(
             format!("Expected field type, found {:?}", token.token),
             token.location,

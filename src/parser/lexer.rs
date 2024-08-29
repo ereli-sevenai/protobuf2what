@@ -1,15 +1,14 @@
+use super::{error::Location, ParseError};
+use log::{debug, trace};
 use nom::{
     branch::alt,
     bytes::complete::{tag, take, take_while, take_while1},
-    character::complete::{alpha1, alphanumeric1, char, digit1, multispace0},
+    character::complete::{alpha1, alphanumeric0, char, digit1, multispace0},
     combinator::{map, map_res, opt, recognize},
     multi::many0,
     sequence::{delimited, pair, preceded},
     IResult,
 };
-
-use super::{error::Location, ParseError};
-use log::{debug, trace};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token<'a> {
@@ -52,6 +51,7 @@ pub enum Token<'a> {
     Required,
     Comment(&'a str),
     Whitespace,
+    Optional,
     Unknown(String),
 }
 
@@ -95,6 +95,7 @@ impl<'a> ToString for Token<'a> {
             Token::LessThan => "<".to_string(),
             Token::GreaterThan => ">".to_string(),
             Token::Required => "required".to_string(),
+            Token::Optional => "optional".to_string(),
             Token::Comment(s) => format!("Comment({})", s),
             Token::Whitespace => "whitespace".to_string(),
             Token::Unknown(s) => s.to_string(),
@@ -130,37 +131,110 @@ impl<'a> PartialEq for TokenWithLocation<'a> {
     }
 }
 
-fn parse_keyword(input: &str) -> IResult<&str, Token> {
+#[allow(dead_code)]
+fn parse_syntax_keywords(input: &str) -> IResult<&str, Token> {
     alt((
         map(tag("syntax"), |_| Token::Syntax),
         map(tag("proto2"), |_| Token::Proto2),
         map(tag("proto3"), |_| Token::Proto3),
+    ))(input)
+}
+
+#[allow(dead_code)]
+fn parse_import_keywords(input: &str) -> IResult<&str, Token> {
+    alt((
         map(tag("import"), |_| Token::Import),
-        map(tag("package"), |_| Token::Package),
+        map(tag("weak"), |_| Token::Weak),
+        map(tag("public"), |_| Token::Public),
+    ))(input)
+}
+
+#[allow(dead_code)]
+fn parse_message_keywords(input: &str) -> IResult<&str, Token> {
+    alt((
         map(tag("message"), |_| Token::Message),
         map(tag("enum"), |_| Token::Enum),
+        map(tag("oneof"), |_| Token::Oneof),
+        map(tag("map"), |_| Token::Map),
+    ))(input)
+}
+
+#[allow(dead_code)]
+fn parse_field_keywords(input: &str) -> IResult<&str, Token> {
+    alt((
+        map(tag("repeated"), |_| Token::Repeated),
+        map(tag("optional"), |_| Token::Optional),
+        map(tag("required"), |_| Token::Required),
+        map(tag("string"), |_| Token::StringType),
+    ))(input)
+}
+
+#[allow(dead_code)]
+fn parse_service_keywords(input: &str) -> IResult<&str, Token> {
+    alt((
         map(tag("service"), |_| Token::Service),
         map(tag("rpc"), |_| Token::Rpc),
         map(tag("returns"), |_| Token::Returns),
-        map(tag("option"), |_| Token::Option),
-        map(tag("repeated"), |_| Token::Repeated),
-        map(tag("oneof"), |_| Token::Oneof),
-        map(tag("map"), |_| Token::Map),
+    ))(input)
+}
+
+#[allow(dead_code)]
+fn parse_option_keywords(input: &str) -> IResult<&str, Token> {
+    map(tag("option"), |_| Token::Option)(input)
+}
+
+#[allow(dead_code)]
+fn parse_misc_keywords(input: &str) -> IResult<&str, Token> {
+    alt((
+        map(tag("package"), |_| Token::Package),
         map(tag("reserved"), |_| Token::Reserved),
         map(tag("to"), |_| Token::To),
-        map(tag("weak"), |_| Token::Weak),
-        map(tag("public"), |_| Token::Public),
         map(tag("extensions"), |_| Token::Extensions),
     ))(input)
 }
 
+#[allow(dead_code)]
+fn parse_keyword(input: &str) -> IResult<&str, Token> {
+    alt((
+        parse_syntax_keywords,
+        parse_import_keywords,
+        parse_message_keywords,
+        parse_field_keywords,
+        parse_service_keywords,
+        parse_option_keywords,
+        parse_misc_keywords,
+    ))(input)
+}
+
+#[allow(dead_code)]
 fn parse_identifier(input: &str) -> IResult<&str, Token> {
     map(
-        recognize(pair(
-            alt((alpha1, tag("_"))),
-            many0(alt((alphanumeric1, tag("_")))),
-        )),
-        |s: &str| Token::Identifier(s),
+        recognize(pair(alt((alpha1, tag("_"))), opt(alphanumeric0))),
+        |s: &str| match s {
+            "syntax" => Token::Syntax,
+            "proto2" => Token::Proto2,
+            "proto3" => Token::Proto3,
+            "import" => Token::Import,
+            "package" => Token::Package,
+            "message" => Token::Message,
+            "enum" => Token::Enum,
+            "service" => Token::Service,
+            "rpc" => Token::Rpc,
+            "returns" => Token::Returns,
+            "option" => Token::Option,
+            "repeated" => Token::Repeated,
+            "oneof" => Token::Oneof,
+            "map" => Token::Map,
+            "reserved" => Token::Reserved,
+            "to" => Token::To,
+            "weak" => Token::Weak,
+            "public" => Token::Public,
+            "extensions" => Token::Extensions,
+            "required" => Token::Required,
+            "optional" => Token::Optional,
+            "string" => Token::StringType,
+            _ => Token::Identifier(s),
+        },
     )(input)
 }
 
@@ -239,9 +313,9 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
     preceded(
         multispace0,
         alt((
-            parse_keyword,
-            parse_string_literal,
+            parse_compound_identifier,
             parse_identifier,
+            parse_string_literal,
             parse_float_literal,
             parse_int_literal,
             parse_symbol,
@@ -251,6 +325,53 @@ fn parse_token(input: &str) -> IResult<&str, Token> {
     )(input)
 }
 
+fn parse_compound_identifier(input: &str) -> IResult<&str, Token> {
+    map(
+        recognize(pair(
+            alt((
+                tag("message"),
+                tag("map"),
+                tag("repeated"),
+                tag("required"),
+                tag("optional"),
+                // Add other keyword prefixes here if needed
+                alpha1,
+            )),
+            many0(alt((
+                recognize(pair(
+                    tag("_"),
+                    take_while1(|c: char| c.is_alphanumeric() || c == '_'),
+                )),
+                recognize(take_while1(|c: char| c.is_alphanumeric())),
+            ))),
+        )),
+        |s: &str| match s {
+            "message" => Token::Message,
+            "map" => Token::Map,
+            "repeated" => Token::Repeated,
+            "required" => Token::Required,
+            "optional" => Token::Optional,
+            "syntax" => Token::Syntax,
+            "proto2" => Token::Proto2,
+            "proto3" => Token::Proto3,
+            "import" => Token::Import,
+            "package" => Token::Package,
+            "enum" => Token::Enum,
+            "service" => Token::Service,
+            "rpc" => Token::Rpc,
+            "returns" => Token::Returns,
+            "option" => Token::Option,
+            "oneof" => Token::Oneof,
+            "reserved" => Token::Reserved,
+            "to" => Token::To,
+            "weak" => Token::Weak,
+            "public" => Token::Public,
+            "extensions" => Token::Extensions,
+            "string" => Token::StringType,
+            _ => Token::Identifier(s),
+        },
+    )(input)
+}
 pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
     debug!(
         "Starting tokenization of input with length: {}",
@@ -291,7 +412,6 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
             line,
             column
         );
-        debug!("Remaining input: {:?}", remaining);
 
         let (new_remaining, token_opt) = match alt((
             map(parse_token, Some),
@@ -397,7 +517,7 @@ mod tests {
                     location: Location::new(4, 31)
                 },
                 TokenWithLocation {
-                    token: Token::Identifier("string"),
+                    token: Token::StringType, // Changed from Identifier("string") to StringType
                     location: Location::new(4, 33)
                 },
                 TokenWithLocation {
@@ -595,7 +715,7 @@ mod tests {
             Token::Comment("/* Multi-line comment */"),
             Token::Identifier("Person"),
             Token::OpenBrace,
-            Token::Identifier("string"),
+            Token::StringType, // Changed from Identifier("string") to StringType
             Token::Identifier("name"),
             Token::Equals,
             Token::IntLiteral(1),
@@ -679,5 +799,94 @@ mod tests {
         // Check that the float is correctly tokenized
         assert_eq!(tokens[6].token, Token::FloatLiteral(2.5));
         assert_eq!(tokens[6].location, Location::new(1, 29));
+    }
+
+    #[test]
+    fn test_custom_message_field() {
+        let input = "message TestMessage { CustomMessage message_field = 1; }";
+        let tokens = tokenize(input).unwrap();
+
+        let actual_tokens: Vec<_> = tokens.iter().map(|t| &t.token).collect();
+        let expected_tokens = vec![
+            &Token::Message,
+            &Token::Identifier("TestMessage"),
+            &Token::OpenBrace,
+            &Token::Identifier("CustomMessage"),
+            &Token::Identifier("message_field"),
+            &Token::Equals,
+            &Token::IntLiteral(1),
+            &Token::Semicolon,
+            &Token::CloseBrace,
+        ];
+
+        for (i, (actual, expected)) in actual_tokens.iter().zip(expected_tokens.iter()).enumerate()
+        {
+            assert_eq!(
+                actual, expected,
+                "Mismatch at token {}: actual {:?}, expected {:?}",
+                i, actual, expected
+            );
+        }
+
+        assert_eq!(
+            actual_tokens.len(),
+            expected_tokens.len(),
+            "Token count mismatch"
+        );
+    }
+
+    #[test]
+    fn test_parse_misc_keywords() {
+        assert_eq!(parse_misc_keywords("package"), Ok(("", Token::Package)));
+        assert_eq!(parse_misc_keywords("reserved"), Ok(("", Token::Reserved)));
+        assert_eq!(parse_misc_keywords("to"), Ok(("", Token::To)));
+        assert_eq!(
+            parse_misc_keywords("extensions"),
+            Ok(("", Token::Extensions))
+        );
+    }
+
+    #[test]
+    fn test_parse_misc_keywords_with_suffix() {
+        assert_eq!(
+            parse_misc_keywords("package_name"),
+            Ok(("_name", Token::Package))
+        );
+        assert_eq!(parse_misc_keywords("reserved1"), Ok(("1", Token::Reserved)));
+        assert_eq!(parse_misc_keywords("to_field"), Ok(("_field", Token::To)));
+        assert_eq!(
+            parse_misc_keywords("extensions_list"),
+            Ok(("_list", Token::Extensions))
+        );
+    }
+
+    #[test]
+    fn test_parse_misc_keywords_failure() {
+        assert!(parse_misc_keywords("other").is_err());
+        assert!(parse_misc_keywords("packag").is_err());
+        assert!(parse_misc_keywords("reserve").is_err());
+        assert!(parse_misc_keywords("t").is_err());
+        assert!(parse_misc_keywords("extension").is_err());
+    }
+
+    #[test]
+    fn test_parse_syntax_keywords() {
+        assert_eq!(parse_syntax_keywords("syntax"), Ok(("", Token::Syntax)));
+        assert_eq!(parse_syntax_keywords("proto2"), Ok(("", Token::Proto2)));
+        assert_eq!(parse_syntax_keywords("proto3"), Ok(("", Token::Proto3)));
+    }
+
+    #[test]
+    fn test_parse_syntax_keywords_with_suffix() {
+        assert_eq!(parse_syntax_keywords("syntax="), Ok(("=", Token::Syntax)));
+        assert_eq!(parse_syntax_keywords("proto2;"), Ok((";", Token::Proto2)));
+        assert_eq!(parse_syntax_keywords("proto3 "), Ok((" ", Token::Proto3)));
+    }
+
+    #[test]
+    fn test_parse_syntax_keywords_failure() {
+        assert!(parse_syntax_keywords("syntx").is_err());
+        assert!(parse_syntax_keywords("proto").is_err());
+        assert!(parse_syntax_keywords("proto4").is_err());
     }
 }

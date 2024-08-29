@@ -258,6 +258,7 @@ mod tests {
             typ: FieldType::MessageOrEnum(String::new()),
             options: Vec::new(),
         });
+
         message.fields.push(Field {
             name: "age".to_string(),
             number: 2,
