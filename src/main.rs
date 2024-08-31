@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut proto_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     proto_path.push("files");
-    proto_path.push("simple.proto");
+    proto_path.push("logdservice.proto");
 
     info!("Reading Protobuf file from: {}", proto_path.display());
 

@@ -1,5 +1,4 @@
-syntax = "proto3";
-// @zod-version: 1.0
+syntax = "proto3"; // @zod-version: 1.0
 
 message User // @zod { description: "Represents a user in the system" }
 {
