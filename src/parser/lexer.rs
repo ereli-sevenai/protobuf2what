@@ -1,9 +1,9 @@
 use super::{error::Location, ParseError};
-use log::{debug, trace};
+use log::debug;
 use nom::{
     branch::alt,
     bytes::complete::{tag, take, take_while, take_while1},
-    character::complete::{alpha1, alphanumeric0, char, digit1, multispace0},
+    character::complete::{alpha1, alphanumeric1, char, digit1, multispace0},
     combinator::{map, map_res, opt, recognize},
     multi::many0,
     sequence::{delimited, pair, preceded},
@@ -29,8 +29,10 @@ pub enum Token<'a> {
     Reserved,
     To,
     Weak,
+    Stream,
     Public,
     Extensions,
+    FullyQualifiedIdentifier(&'a str),
     Identifier(&'a str),
     StringLiteral(&'a str),
     StringType,
@@ -67,6 +69,7 @@ impl<'a> ToString for Token<'a> {
             Token::Enum => "enum".to_string(),
             Token::Service => "service".to_string(),
             Token::Rpc => "rpc".to_string(),
+            Token::Stream => "stream".to_string(),
             Token::Returns => "returns".to_string(),
             Token::Option => "option".to_string(),
             Token::Repeated => "repeated".to_string(),
@@ -78,6 +81,7 @@ impl<'a> ToString for Token<'a> {
             Token::Public => "public".to_string(),
             Token::Extensions => "extensions".to_string(),
             Token::Identifier(s) => s.to_string(),
+            Token::FullyQualifiedIdentifier(s) => s.to_string(),
             Token::StringLiteral(s) => format!("\"{}\"", s),
             Token::StringType => "string".to_string(),
             Token::IntLiteral(i) => i.to_string(),
@@ -209,7 +213,10 @@ fn parse_keyword(input: &str) -> IResult<&str, Token> {
 #[allow(dead_code)]
 fn parse_identifier(input: &str) -> IResult<&str, Token> {
     map(
-        recognize(pair(alt((alpha1, tag("_"))), opt(alphanumeric0))),
+        recognize(pair(
+            alt((alpha1, tag("_"))),
+            many0(alt((alphanumeric1, tag("_")))),
+        )),
         |s: &str| match s {
             "syntax" => Token::Syntax,
             "proto2" => Token::Proto2,
@@ -372,99 +379,249 @@ fn parse_compound_identifier(input: &str) -> IResult<&str, Token> {
         },
     )(input)
 }
+
 pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
+    let mut tokens = Vec::new();
+    let mut pos = 0;
+    let mut line = 1;
+    let mut column = 1;
+
     debug!(
         "Starting tokenization of input with length: {}",
         input.len()
     );
-    let mut tokens = Vec::new();
-    let mut remaining = input;
-    let mut line = 1;
-    let mut column = 1;
 
-    // Handle initial whitespace
-    let (new_remaining, _) =
-        match take_while::<_, _, nom::error::Error<&str>>(|c: char| c.is_whitespace())(remaining) {
-            Ok(result) => result,
-            Err(_) => {
-                return Err(ParseError::LexerError(
-                    "Failed to parse initial whitespace".to_string(),
-                    Location::new(line, column),
-                ))
-            }
-        };
+    while pos < input.len() {
+        let current_char = input[pos..].chars().next().unwrap();
+        let start_column = column;
 
-    // Update line and column based on initial whitespace
-    for c in remaining[..remaining.len() - new_remaining.len()].chars() {
-        if c == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-
-    remaining = new_remaining;
-
-    while !remaining.is_empty() {
-        trace!(
-            "Processing remaining input at line {}, column {}",
-            line,
-            column
+        debug!(
+            "Processing character '{}' at position {}",
+            current_char, pos
         );
 
-        let (new_remaining, token_opt) = match alt((
-            map(parse_token, Some),
-            map(recognize(parse_comment), |_| None),
-            map(take_while1(char::is_whitespace), |_| None),
-        ))(remaining)
-        {
-            Ok(result) => result,
-            Err(nom::Err::Error(e)) | Err(nom::Err::Failure(e)) => {
-                return Err(ParseError::LexerError(
-                    format!(
-                        "Failed to parse token at line {}, column {}: {:?}",
-                        line, column, e
-                    ),
-                    Location::new(line, column),
-                ));
+        let (token, len) = match current_char {
+            ' ' | '\t' | '\r' => {
+                pos += 1;
+                column += 1;
+                continue;
             }
-            Err(nom::Err::Incomplete(_)) => {
-                return Err(ParseError::LexerError(
-                    format!("Incomplete input at line {}, column {}", line, column),
-                    Location::new(line, column),
+            '\n' => {
+                pos += 1;
+                line += 1;
+                column = 1;
+                continue;
+            }
+            '/' => {
+                if input[pos..].starts_with("//") {
+                    let end = pos + input[pos..].find('\n').unwrap_or(input.len() - pos);
+                    let comment = &input[pos..end];
+                    pos = end;
+                    line += 1;
+                    column = 1;
+                    debug!("Found single-line comment: {}", comment);
+                    (Token::Comment(comment), comment.len())
+                } else if input[pos..].starts_with("/*") {
+                    let end = pos + input[pos..].find("*/").map_or(input.len() - pos, |i| i + 2);
+                    let comment = &input[pos..end];
+                    let newlines = comment.chars().filter(|&c| c == '\n').count();
+                    pos = end;
+                    line += newlines;
+                    if newlines > 0 {
+                        column = comment.chars().rev().take_while(|&c| c != '\n').count() + 1;
+                    } else {
+                        column += comment.len();
+                    }
+                    debug!("Found multi-line comment: {}", comment);
+                    (Token::Comment(comment), comment.len())
+                } else {
+                    return Err(ParseError::UnexpectedCharacter(
+                        '/',
+                        Location { line, column },
+                    ));
+                }
+            }
+            '"' => {
+                let mut end = pos + 1;
+                while end < input.len() {
+                    if input[end..].starts_with('"') {
+                        break;
+                    }
+                    end += 1;
+                }
+                if end == input.len() {
+                    return Err(ParseError::UnterminatedStringLiteral(Location {
+                        line,
+                        column,
+                    }));
+                }
+                let string_literal = &input[pos + 1..end];
+                let len = end - pos + 1;
+                pos = end + 1;
+                column += len;
+                debug!("Found string literal: {}", string_literal);
+                (Token::StringLiteral(string_literal), len)
+            }
+            '0'..='9' => {
+                let (token, len) = tokenize_number(&input[pos..]);
+                pos += len;
+                column += len;
+                debug!("Found number: {:?}", token);
+                (token, len)
+            }
+            'a'..='z' | 'A'..='Z' | '_' => {
+                let (token, len) = tokenize_identifier(&input[pos..]);
+                pos += len;
+                column += len;
+                debug!("Found identifier or keyword: {:?}", token);
+                (token, len)
+            }
+            '=' => {
+                pos += 1;
+                column += 1;
+                (Token::Equals, 1)
+            }
+            ';' => {
+                pos += 1;
+                column += 1;
+                (Token::Semicolon, 1)
+            }
+            '{' => {
+                pos += 1;
+                column += 1;
+                (Token::OpenBrace, 1)
+            }
+            '}' => {
+                pos += 1;
+                column += 1;
+                (Token::CloseBrace, 1)
+            }
+            '(' => {
+                pos += 1;
+                column += 1;
+                (Token::OpenParen, 1)
+            }
+            ')' => {
+                pos += 1;
+                column += 1;
+                (Token::CloseParen, 1)
+            }
+            '[' => {
+                pos += 1;
+                column += 1;
+                (Token::OpenBracket, 1)
+            }
+            ']' => {
+                pos += 1;
+                column += 1;
+                (Token::CloseBracket, 1)
+            }
+            '<' => {
+                pos += 1;
+                column += 1;
+                (Token::LessThan, 1)
+            }
+            '>' => {
+                pos += 1;
+                column += 1;
+                (Token::GreaterThan, 1)
+            }
+            ',' => {
+                pos += 1;
+                column += 1;
+                (Token::Comma, 1)
+            }
+            '.' => {
+                pos += 1;
+                column += 1;
+                (Token::Dot, 1)
+            }
+            c => {
+                debug!("Encountered unexpected character: {}", c);
+                return Err(ParseError::UnexpectedCharacter(
+                    c,
+                    Location { line, column },
                 ));
             }
         };
 
-        let token_len = remaining.len() - new_remaining.len();
-        let token_str = &remaining[..token_len];
-
-        if let Some(token) = token_opt {
-            let location = Location::new(line, column);
-            let token_with_location = TokenWithLocation {
-                token: token.clone(),
-                location,
-            };
-            debug!("Tokenized: {:?} at {:?}", token, location);
-            tokens.push(token_with_location);
-        }
-
-        // Update line and column
-        for c in token_str.chars() {
-            if c == '\n' {
-                line += 1;
-                column = 1;
-            } else {
-                column += 1;
-            }
-        }
-
-        remaining = new_remaining;
+        tokens.push(TokenWithLocation {
+            token,
+            location: Location {
+                line,
+                column: start_column,
+            },
+        });
     }
 
-    debug!("Tokenization complete. Total tokens: {}", tokens.len());
+    debug!("{:?}", tokens);
     Ok(tokens)
+}
+
+fn tokenize_number(input: &str) -> (Token, usize) {
+    let mut end = 0;
+    let mut is_float = false;
+    for (i, ch) in input.char_indices() {
+        match ch {
+            '0'..='9' => end = i + 1,
+            '.' if !is_float => {
+                is_float = true;
+                end = i + 1;
+            }
+            'e' | 'E' if !input[..i].contains('e') && !input[..i].contains('E') => {
+                is_float = true;
+                end = i + 1;
+                if i + 1 < input.len()
+                    && (input[i + 1..].starts_with('+') || input[i + 1..].starts_with('-'))
+                {
+                    end += 1;
+                }
+            }
+            _ => break,
+        }
+    }
+    let number_str = &input[..end];
+    if is_float {
+        (Token::FloatLiteral(number_str.parse().unwrap()), end)
+    } else {
+        (Token::IntLiteral(number_str.parse().unwrap()), end)
+    }
+}
+
+fn tokenize_identifier(input: &str) -> (Token, usize) {
+    let mut end = 0;
+    for (i, ch) in input.char_indices() {
+        if ch.is_alphanumeric() || ch == '_' {
+            end = i + 1;
+        } else {
+            break;
+        }
+    }
+    let identifier = &input[..end];
+    match identifier {
+        "syntax" => (Token::Syntax, end),
+        "proto2" => (Token::Proto2, end),
+        "proto3" => (Token::Proto3, end),
+        "import" => (Token::Import, end),
+        "package" => (Token::Package, end),
+        "message" => (Token::Message, end),
+        "enum" => (Token::Enum, end),
+        "service" => (Token::Service, end),
+        "rpc" => (Token::Rpc, end),
+        "returns" => (Token::Returns, end),
+        "option" => (Token::Option, end),
+        "repeated" => (Token::Repeated, end),
+        "oneof" => (Token::Oneof, end),
+        "map" => (Token::Map, end),
+        "reserved" => (Token::Reserved, end),
+        "to" => (Token::To, end),
+        "weak" => (Token::Weak, end),
+        "public" => (Token::Public, end),
+        "extensions" => (Token::Extensions, end),
+        "stream" => (Token::Stream, end),
+        // Add any other keywords here
+        _ => (Token::Identifier(identifier), end),
+    }
 }
 
 #[cfg(test)]
@@ -715,7 +872,7 @@ mod tests {
             Token::Comment("/* Multi-line comment */"),
             Token::Identifier("Person"),
             Token::OpenBrace,
-            Token::StringType, // Changed from Identifier("string") to StringType
+            Token::StringType,
             Token::Identifier("name"),
             Token::Equals,
             Token::IntLiteral(1),
@@ -758,31 +915,116 @@ mod tests {
     #[test]
     fn test_location_tracking() {
         let input = r#"
-            syntax = "proto3";
-            message Person {
-                string name = 1;
-            }
+                syntax = "proto3";
+                message Person {
+                    string name = 1;
+                }
             "#;
 
         let tokens = tokenize(input).unwrap();
 
-        for (i, token) in tokens.iter().enumerate() {
-            println!("Token {}: {:?} at {:?}", i, token.token, token.location);
-        }
+        let expected_locations = vec![
+            (
+                Token::Syntax,
+                Location {
+                    line: 2,
+                    column: 13,
+                },
+            ),
+            (
+                Token::Equals,
+                Location {
+                    line: 2,
+                    column: 20,
+                },
+            ),
+            (
+                Token::StringLiteral("proto3"),
+                Location {
+                    line: 2,
+                    column: 22,
+                },
+            ),
+            (
+                Token::Semicolon,
+                Location {
+                    line: 2,
+                    column: 30,
+                },
+            ),
+            (
+                Token::Message,
+                Location {
+                    line: 3,
+                    column: 13,
+                },
+            ),
+            (
+                Token::Identifier("Person"),
+                Location {
+                    line: 3,
+                    column: 21,
+                },
+            ),
+            (
+                Token::OpenBrace,
+                Location {
+                    line: 3,
+                    column: 28,
+                },
+            ),
+            (
+                Token::Identifier("string"),
+                Location {
+                    line: 4,
+                    column: 17,
+                },
+            ),
+            (
+                Token::Identifier("name"),
+                Location {
+                    line: 4,
+                    column: 24,
+                },
+            ),
+            (
+                Token::Equals,
+                Location {
+                    line: 4,
+                    column: 29,
+                },
+            ),
+            (
+                Token::IntLiteral(1),
+                Location {
+                    line: 4,
+                    column: 31,
+                },
+            ),
+            (
+                Token::Semicolon,
+                Location {
+                    line: 4,
+                    column: 32,
+                },
+            ),
+            (
+                Token::CloseBrace,
+                Location {
+                    line: 5,
+                    column: 13,
+                },
+            ),
+        ];
 
-        assert_eq!(tokens[0].location, Location::new(2, 13)); // syntax
-        assert_eq!(tokens[1].location, Location::new(2, 19)); // =
-        assert_eq!(tokens[2].location, Location::new(2, 21)); // "proto3"
-        assert_eq!(tokens[3].location, Location::new(2, 30)); // ;
-        assert_eq!(tokens[4].location, Location::new(2, 31)); // message
-        assert_eq!(tokens[5].location, Location::new(3, 20)); // Person
-        assert_eq!(tokens[6].location, Location::new(3, 27)); // {
-        assert_eq!(tokens[7].location, Location::new(3, 29)); // string
-        assert_eq!(tokens[8].location, Location::new(4, 23)); // name
-        assert_eq!(tokens[9].location, Location::new(4, 28)); // =
-        assert_eq!(tokens[10].location, Location::new(4, 30)); // 1
-        assert_eq!(tokens[11].location, Location::new(4, 32)); // ;
-        assert_eq!(tokens[12].location, Location::new(4, 33)); // }
+        for (i, (expected_token, expected_location)) in expected_locations.into_iter().enumerate() {
+            assert_eq!(tokens[i].token, expected_token);
+            assert_eq!(
+                tokens[i].location, expected_location,
+                "Mismatch at token {}",
+                i
+            );
+        }
     }
 
     #[test]
@@ -798,7 +1040,7 @@ mod tests {
 
         // Check that the float is correctly tokenized
         assert_eq!(tokens[6].token, Token::FloatLiteral(2.5));
-        assert_eq!(tokens[6].location, Location::new(1, 29));
+        assert_eq!(tokens[6].location, Location::new(1, 30));
     }
 
     #[test]

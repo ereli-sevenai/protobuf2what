@@ -51,31 +51,46 @@ pub fn parse_proto_file(input: &str) -> Result<ProtoFile, ParseError> {
     parse_tokenized_input(&mut token_iter)
 }
 
-fn parse_tokenized_input<'a, I>(tokens: &mut Peekable<I>) -> Result<ProtoFile, ParseError>
+fn parse_tokenized_input<'a, I>(tokens: I) -> Result<ProtoFile, ParseError>
 where
     I: Iterator<Item = TokenWithLocation<'a>>,
 {
+    let mut tokens = tokens.peekable();
     let mut proto_file = ProtoFile::new();
+
+    // Skip initial comments
+    skip_comments_and_whitespace(&mut tokens);
+
+    // Parse syntax (required)
+    parse_syntax(&mut tokens, &mut proto_file)?;
+
+    // Parse options that might follow syntax
+    while let Some(token) = tokens.peek() {
+        match &token.token {
+            Token::Option => parse_option(&mut tokens, &mut proto_file.options)?,
+            _ => break,
+        }
+    }
 
     while let Some(current_token) = tokens.peek() {
         match &current_token.token {
-            Token::Syntax => parse_syntax(tokens, &mut proto_file)?,
-            Token::Package => parse_package(tokens, &mut proto_file)?,
-            Token::Import => parse_import(tokens, &mut proto_file)?,
+            Token::Package => parse_package(&mut tokens, &mut proto_file)?,
+            Token::Import => parse_import(&mut tokens, &mut proto_file)?,
             Token::Message => {
-                let message = parse_message(tokens)?;
+                let message = parse_message(&mut tokens)?;
                 proto_file.messages.push(message);
             }
             Token::Enum => {
-                let enum_def = parse_enum(tokens)?;
+                let enum_def = parse_enum(&mut tokens)?;
                 proto_file.enums.push(enum_def);
             }
             Token::Service => {
-                tokens.next(); // consume 'service' token
-                let service = parse_service(tokens)?;
+                let service = parse_service(&mut tokens)?;
                 proto_file.services.push(service);
             }
-            Token::Option => parse_option(tokens, &mut proto_file.options)?,
+            Token::Comment(_) => {
+                tokens.next(); // Skip comments
+            }
             _ => {
                 let loc = current_token.location.clone();
                 return Err(ParseError::UnexpectedToken(
@@ -84,26 +99,27 @@ where
                 ));
             }
         }
+
+        // Skip comments between top-level elements
+        skip_comments_and_whitespace(&mut tokens);
     }
 
     Ok(proto_file)
 }
 
-fn skip_comments<'a, I>(tokens: &mut Peekable<I>) -> Result<(), ParseError>
+fn skip_comments_and_whitespace<'a, I>(tokens: &mut Peekable<I>)
 where
     I: Iterator<Item = TokenWithLocation<'a>>,
 {
-    while let Some(token_with_location) = tokens.peek() {
-        match &token_with_location.token {
-            Token::Comment(_) => {
-                tokens.next(); // Consume the comment
+    while let Some(token) = tokens.peek() {
+        match token.token {
+            Token::Comment(_) | Token::Whitespace => {
+                tokens.next(); // Consume the token
             }
             _ => break,
         }
     }
-    Ok(())
 }
-
 /// Parses the syntax declaration of a Protobuf file.
 ///
 /// This function expects to find a syntax declaration at the beginning of the file,
@@ -159,6 +175,7 @@ where
     let version_token = tokens
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(equals_token.location))?;
+    debug!("Parsing syntax version: {:?}", version_token);
     match version_token.token {
         Token::StringLiteral("proto2") => proto_file.syntax = Syntax::Proto2,
         Token::StringLiteral("proto3") => proto_file.syntax = Syntax::Proto3,
@@ -171,14 +188,19 @@ where
     }
 
     // Expect semicolon
-    let semicolon_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(version_token.location))?;
-    if semicolon_token.token != Token::Semicolon {
-        return Err(ParseError::UnexpectedToken(
-            format!("Expected ';', found {:?}", semicolon_token.token),
-            semicolon_token.location,
-        ));
+    debug!("Expecting semicolon after syntax version");
+    if let Some(token) = tokens.peek() {
+        debug!("Next token: {:?}", token);
+        if token.token != Token::Semicolon {
+            return Err(ParseError::UnexpectedToken(
+                format!("Expected ';', found {:?}", token.token),
+                token.location,
+            ));
+        }
+        tokens.next(); // Consume the semicolon
+        debug!("Consumed semicolon");
+    } else {
+        return Err(ParseError::UnexpectedEndOfInput(version_token.location));
     }
 
     Ok(())
@@ -211,33 +233,64 @@ where
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
         .expect(Token::Package)?;
 
-    // Parse package name
-    let name_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(package_token.location))?;
-    match name_token.token {
-        Token::Identifier(package_name) => {
-            proto_file.package = Some(package_name.to_string());
+    // Parse package name (which may be a single FullyQualifiedIdentifier or a series of Identifiers separated by dots)
+    let package_name = match tokens.next() {
+        Some(TokenWithLocation {
+            token: Token::FullyQualifiedIdentifier(name),
+            ..
+        }) => name.to_string(),
+        Some(TokenWithLocation {
+            token: Token::Identifier(name),
+            ..
+        }) => {
+            let mut full_name = name.to_string();
+            while let Some(TokenWithLocation { token, .. }) = tokens.peek() {
+                match token {
+                    Token::Dot => {
+                        tokens.next(); // Consume the dot
+                        match tokens.next() {
+                            Some(TokenWithLocation {
+                                token: Token::Identifier(next_part),
+                                ..
+                            }) => {
+                                full_name.push('.');
+                                full_name.push_str(next_part);
+                            }
+                            _ => {
+                                return Err(ParseError::UnexpectedToken(
+                                    "Expected identifier after dot in package name".to_string(),
+                                    package_token.location,
+                                ))
+                            }
+                        }
+                    }
+                    Token::Semicolon => break,
+                    _ => {
+                        return Err(ParseError::UnexpectedToken(
+                            format!("Unexpected token in package name: {:?}", token),
+                            package_token.location,
+                        ))
+                    }
+                }
+            }
+            full_name
         }
-        _ => {
+        Some(t) => {
             return Err(ParseError::UnexpectedToken(
-                format!("Expected package name, found {:?}", name_token.token),
-                name_token.location,
-            ));
+                format!("Expected package name, found {:?}", t.token),
+                t.location,
+            ))
         }
-    }
+        None => return Err(ParseError::UnexpectedEndOfInput(package_token.location)),
+    };
 
     // Expect semicolon
-    let semicolon_token = tokens
+    tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?;
-    if semicolon_token.token != Token::Semicolon {
-        return Err(ParseError::UnexpectedToken(
-            format!("Expected ';', found {:?}", semicolon_token.token),
-            semicolon_token.location,
-        ));
-    }
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(package_token.location))?
+        .expect(Token::Semicolon)?;
 
+    proto_file.package = Some(package_name);
     Ok(())
 }
 
@@ -296,10 +349,11 @@ where
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(import_token.location))?;
     let path = match path_token.token {
         Token::StringLiteral(path) => path.to_string(),
+        Token::Identifier(path) | Token::FullyQualifiedIdentifier(path) => path.to_string(),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!(
-                    "Expected string literal for import path, found {:?}",
+                    "Expected string literal or identifier for import path, found {:?}",
                     path_token.token
                 ),
                 path_token.location,
@@ -308,10 +362,15 @@ where
     };
 
     // Expect semicolon
-    let _semicolon_token = tokens
+    let semicolon_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(path_token.location))?
-        .expect(Token::Semicolon)?;
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(path_token.location))?;
+    if semicolon_token.token != Token::Semicolon {
+        return Err(ParseError::UnexpectedToken(
+            format!("Expected ';', found {:?}", semicolon_token.token),
+            semicolon_token.location,
+        ));
+    }
 
     // Add the import to the proto file
     proto_file.imports.push(Import { path, kind });
@@ -342,12 +401,7 @@ where
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
 
     match &message_token.token {
-        Token::Identifier(s) if s.to_string() == "message" => {
-            // This is the 'message' keyword
-        }
-        Token::Message => {
-            // If you have a specific Message token, handle it here
-        }
+        Token::Message => {}
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected 'message', found {:?}", message_token.token),
@@ -361,7 +415,7 @@ where
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(message_token.location))?;
     let name = match &name_token.token {
-        Token::Identifier(s) => s.to_string(),
+        Token::Identifier(s) | Token::FullyQualifiedIdentifier(s) => s.to_string(),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected message name, found {:?}", name_token.token),
@@ -385,34 +439,41 @@ where
 
     // Parse message body
     while let Some(token_with_location) = tokens.peek() {
-        match &token_with_location.token {
-            Token::CloseBrace => {
-                tokens.next(); // Consume closing brace
-                return Ok(message);
+        skip_comments_and_whitespace(tokens);
+
+        if let Some(token_with_location) = tokens.peek() {
+            match &token_with_location.token {
+                Token::CloseBrace => {
+                    tokens.next(); // Consume closing brace
+                    return Ok(message);
+                }
+                Token::Message => {
+                    let nested_message = parse_message(tokens)?;
+                    message.nested_messages.push(nested_message);
+                }
+                Token::Enum => {
+                    let nested_enum = parse_enum(tokens)?;
+                    message.nested_enums.push(nested_enum);
+                }
+                Token::Option => {
+                    parse_option(tokens, &mut message.options)?;
+                }
+                Token::Reserved => {
+                    parse_reserved(tokens, &mut message.reserved)?;
+                }
+                _ => {
+                    let field = parse_field(tokens)?;
+                    message.fields.push(field);
+                }
             }
-            Token::Message => {
-                let nested_message = parse_message(tokens)?;
-                message.nested_messages.push(nested_message);
-            }
-            Token::Enum => {
-                let nested_enum = parse_enum(tokens)?;
-                message.nested_enums.push(nested_enum);
-            }
-            Token::Option => {
-                parse_option(tokens, &mut message.options)?;
-            }
-            Token::Reserved => {
-                parse_reserved(tokens, &mut message.reserved)?;
-            }
-            _ => {
-                let field = parse_field(tokens)?;
-                message.fields.push(field);
-            }
+        } else {
+            break;
         }
     }
 
     Err(ParseError::UnexpectedEndOfInput(open_brace_token.location))
 }
+
 /// Parses a message definition from the token stream.
 ///
 /// This function expects the 'message' keyword to have already been consumed.
@@ -436,9 +497,7 @@ where
         .map(|t| t.location)
         .unwrap_or(Location::new(0, 0));
 
-    debug!("Starting to parse field at {:?}", start_location);
-
-    skip_comments(tokens)?;
+    skip_comments_and_whitespace(tokens);
 
     // Parse field label (optional, repeated, required)
     let label = match tokens.peek() {
@@ -459,26 +518,17 @@ where
         _ => FieldLabel::Optional,
     };
 
-    skip_comments(tokens)?;
+    skip_comments_and_whitespace(tokens);
 
     // Parse field type
     let type_token = tokens
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(start_location))?;
 
-    debug!("Parsing field type: {:?}", type_token.token);
-
     let (typ, name) = match type_token.token {
         Token::Map => parse_map_field(tokens)?,
-        Token::StringType => {
-            let typ = FieldType::String;
-            skip_comments(tokens)?;
-            let name = parse_field_name(tokens)?;
-            (typ, name)
-        }
-        Token::Identifier(_) => {
+        Token::Identifier(_) | Token::FullyQualifiedIdentifier(_) => {
             let typ = parse_field_type(&type_token)?;
-            skip_comments(tokens)?;
             let name = parse_field_name(tokens)?;
             (typ, name)
         }
@@ -489,23 +539,12 @@ where
             ));
         }
     };
-    debug!("Field type parsed: {:?}", typ);
-    debug!("Field name parsed: {}", name);
 
     // Expect '=' token
-    match tokens.next() {
-        Some(TokenWithLocation {
-            token: Token::Equals,
-            ..
-        }) => {}
-        Some(token) => {
-            return Err(ParseError::UnexpectedToken(
-                format!("Expected '=', found {:?}", token.token),
-                token.location,
-            ));
-        }
-        None => return Err(ParseError::UnexpectedEndOfInput(start_location)),
-    }
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(start_location))?
+        .expect(Token::Equals)?;
 
     // Parse field number
     let number_token = tokens
@@ -522,24 +561,10 @@ where
     };
 
     // Expect semicolon
-    match tokens.next() {
-        Some(TokenWithLocation {
-            token: Token::Semicolon,
-            ..
-        }) => {}
-        Some(token) => {
-            return Err(ParseError::UnexpectedToken(
-                format!("Expected ';', found {:?}", token.token),
-                token.location,
-            ));
-        }
-        None => return Err(ParseError::UnexpectedEndOfInput(start_location)),
-    }
-
-    debug!(
-        "Finished parsing field: {} (type: {:?}, number: {})",
-        name, typ, number
-    );
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(start_location))?
+        .expect(Token::Semicolon)?;
 
     Ok(Field {
         name,
@@ -717,15 +742,20 @@ where
     // Expect 'enum' keyword
     let enum_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
-        .expect(Token::Enum)?;
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
+    if enum_token.token != Token::Enum {
+        return Err(ParseError::UnexpectedToken(
+            format!("Expected 'enum', found {:?}", enum_token.token),
+            enum_token.location,
+        ));
+    }
 
     // Parse enum name
     let name_token = tokens
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(enum_token.location))?;
     let name = match &name_token.token {
-        Token::Identifier(name) => name.to_string(),
+        Token::Identifier(name) | Token::FullyQualifiedIdentifier(name) => name.to_string(),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected enum name, found {:?}", name_token.token),
@@ -737,8 +767,13 @@ where
     // Expect opening brace
     let open_brace_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
-        .expect(Token::OpenBrace)?;
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?;
+    if open_brace_token.token != Token::OpenBrace {
+        return Err(ParseError::UnexpectedToken(
+            format!("Expected '{{', found {:?}", open_brace_token.token),
+            open_brace_token.location,
+        ));
+    }
 
     let mut enum_def = Enum::new(name);
 
@@ -748,13 +783,14 @@ where
                 tokens.next(); // Consume closing brace
                 return Ok(enum_def);
             }
-            Token::Identifier(_) => {
+            Token::Identifier(_) | Token::FullyQualifiedIdentifier(_) => {
                 // Parse enum value
                 let value = parse_enum_value(tokens)?;
                 enum_def.values.push(value);
             }
             Token::Option => {
-                parse_enum_option(tokens, &mut enum_def.options)?;
+                let option = parse_enum_option(tokens)?;
+                enum_def.options.push(option);
             }
             _ => {
                 return Err(ParseError::UnexpectedToken(
@@ -769,6 +805,62 @@ where
     }
 
     Err(ParseError::UnexpectedEndOfInput(open_brace_token.location))
+}
+
+fn parse_enum_option<'a, I>(tokens: &mut Peekable<I>) -> Result<EnumValueOption, ParseError>
+where
+    I: Iterator<Item = TokenWithLocation<'a>>,
+{
+    // Consume 'option' token
+    let option_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::Option)?;
+
+    // Parse option name
+    let name_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(option_token.location))?;
+    let name = match &name_token.token {
+        Token::Identifier(s) | Token::FullyQualifiedIdentifier(s) => s.to_string(),
+        _ => {
+            return Err(ParseError::UnexpectedToken(
+                format!("Expected option name, found {:?}", name_token.token),
+                name_token.location,
+            ));
+        }
+    };
+
+    // Expect equals sign
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
+        .expect(Token::Equals)?;
+
+    // Parse option value
+    let value_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?;
+    let value = match &value_token.token {
+        Token::StringLiteral(s) => EnumValueOptionValue::String(s.to_string()),
+        Token::Identifier(s) => EnumValueOptionValue::Identifier(s.to_string()),
+        Token::IntLiteral(i) => EnumValueOptionValue::Int(*i),
+        Token::FloatLiteral(f) => EnumValueOptionValue::Float(*f),
+        _ => {
+            return Err(ParseError::UnexpectedToken(
+                format!("Expected option value, found {:?}", value_token.token),
+                value_token.location,
+            ));
+        }
+    };
+
+    // Expect semicolon
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(value_token.location))?
+        .expect(Token::Semicolon)?;
+
+    Ok(EnumValueOption { name, value })
 }
 
 /// Parses an enum value from the token stream.
@@ -793,7 +885,7 @@ where
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
     let name = match &name_token.token {
-        Token::Identifier(name) => name.to_string(),
+        Token::Identifier(name) | Token::FullyQualifiedIdentifier(name) => name.to_string(),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected enum value name, found {:?}", name_token.token),
@@ -835,7 +927,33 @@ where
     }) = tokens.peek()
     {
         tokens.next(); // Consume '['
-        options = parse_enum_value_options(tokens)?;
+        loop {
+            let option = parse_enum_value_option(tokens)?;
+            options.push(option);
+
+            match tokens.peek() {
+                Some(TokenWithLocation {
+                    token: Token::Comma,
+                    ..
+                }) => {
+                    tokens.next(); // Consume comma
+                }
+                Some(TokenWithLocation {
+                    token: Token::CloseBracket,
+                    ..
+                }) => {
+                    tokens.next(); // Consume closing bracket
+                    break;
+                }
+                Some(t) => {
+                    return Err(ParseError::UnexpectedToken(
+                        format!("Expected ',' or ']', found {:?}", t.token),
+                        t.location,
+                    ))
+                }
+                None => return Err(ParseError::UnexpectedEndOfInput(number_token.location)),
+            }
+        }
     }
 
     // Expect semicolon
@@ -851,89 +969,9 @@ where
 
     Ok(EnumValue {
         name,
-        number: number.try_into().unwrap(),
+        number: number as i32,
         options,
     })
-}
-
-fn parse_enum_option<'a, I>(
-    tokens: &mut Peekable<I>,
-    options: &mut Vec<EnumValueOption>,
-) -> Result<(), ParseError>
-where
-    I: Iterator<Item = TokenWithLocation<'a>>,
-{
-    // Consume 'option' token
-    let option_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
-        .expect(Token::Option)?;
-
-    // Parse option name
-    let name_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(option_token.location))?;
-
-    // Expect equals sign
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
-        .expect(Token::Equals)?;
-
-    // Parse option value
-    let value = parse_constant(tokens)?;
-
-    // Expect semicolon
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
-        .expect(Token::Semicolon)?;
-
-    options.push(EnumValueOption {
-        name: name_token.token.to_string(),
-        value: EnumValueOptionValue::Identifier(value),
-    });
-
-    Ok(())
-}
-
-fn parse_enum_value_options<'a, I>(
-    tokens: &mut Peekable<I>,
-) -> Result<Vec<EnumValueOption>, ParseError>
-where
-    I: Iterator<Item = TokenWithLocation<'a>>,
-{
-    let mut options = Vec::new();
-
-    loop {
-        let option = parse_enum_value_option(tokens)?;
-        options.push(option);
-
-        match tokens.peek() {
-            Some(TokenWithLocation {
-                token: Token::Comma,
-                ..
-            }) => {
-                tokens.next(); // Consume comma
-            }
-            Some(TokenWithLocation {
-                token: Token::CloseBracket,
-                ..
-            }) => {
-                tokens.next(); // Consume closing bracket
-                break;
-            }
-            Some(t) => {
-                return Err(ParseError::UnexpectedToken(
-                    format!("Expected ',' or ']', found {:?}", t.token),
-                    t.location,
-                ))
-            }
-            None => return Err(ParseError::UnexpectedEndOfInput(Location::new(0, 0))),
-        }
-    }
-
-    Ok(options)
 }
 
 fn parse_enum_value_option<'a, I>(tokens: &mut Peekable<I>) -> Result<EnumValueOption, ParseError>
@@ -945,7 +983,7 @@ where
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
     let name = match &name_token.token {
-        Token::Identifier(name) => name.to_string(),
+        Token::Identifier(name) | Token::FullyQualifiedIdentifier(name) => name.to_string(),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected option name, found {:?}", name_token.token),
@@ -970,10 +1008,10 @@ where
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(equals_token.location))?;
     let value = match &value_token.token {
-        Token::StringLiteral(s) => s.to_string(),
-        Token::IntLiteral(i) => i.to_string(),
-        Token::FloatLiteral(f) => f.to_string(),
-        Token::Identifier(id) => id.to_string(),
+        Token::StringLiteral(s) => EnumValueOptionValue::String(s.to_string()),
+        Token::Identifier(s) => EnumValueOptionValue::Identifier(s.to_string()),
+        Token::IntLiteral(i) => EnumValueOptionValue::Int(*i),
+        Token::FloatLiteral(f) => EnumValueOptionValue::Float(*f),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected option value, found {:?}", value_token.token),
@@ -982,64 +1020,236 @@ where
         }
     };
 
-    Ok(EnumValueOption {
-        name,
-        value: EnumValueOptionValue::Identifier(value),
-    })
+    Ok(EnumValueOption { name, value })
 }
 
 fn parse_service<'a, I>(tokens: &mut Peekable<I>) -> Result<Service, ParseError>
 where
     I: Iterator<Item = TokenWithLocation<'a>>,
 {
+    skip_comments_and_whitespace(tokens);
+
     // Expect 'service' keyword
-    let service_token = tokens
+    tokens
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
         .expect(Token::Service)?;
 
+    skip_comments_and_whitespace(tokens);
+
     // Parse service name
-    let name_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(service_token.location))?;
+    let name = parse_identifier(tokens)?;
+
+    skip_comments_and_whitespace(tokens);
 
     // Expect opening brace
-    let open_brace_token = tokens
+    tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
         .expect(Token::OpenBrace)?;
 
-    let mut service = Service::new(name_token.token.to_string());
+    let mut methods = Vec::new();
+    let mut options = Vec::new();
 
-    while let Some(token_with_location) = tokens.peek() {
-        match &token_with_location.token {
-            Token::CloseBrace => {
-                tokens.next(); // Consume closing brace
-                return Ok(service);
+    loop {
+        skip_comments_and_whitespace(tokens);
+
+        match tokens.peek() {
+            Some(TokenWithLocation {
+                token: Token::CloseBrace,
+                ..
+            }) => {
+                tokens.next(); // Consume '}'
+                break;
             }
-            Token::Option => {
-                parse_option(tokens, &mut service.options)?;
-            }
-            Token::Rpc => {
-                tokens.next(); // Consume 'rpc' token
+            Some(TokenWithLocation {
+                token: Token::Rpc, ..
+            }) => {
                 let method = parse_method(tokens)?;
-                service.methods.push(method);
+                methods.push(method);
             }
-            _ => {
+            Some(TokenWithLocation {
+                token: Token::Option,
+                ..
+            }) => {
+                parse_option(tokens, &mut options)?;
+            }
+            Some(TokenWithLocation {
+                token: Token::Comment(_),
+                ..
+            }) => {
+                tokens.next(); // Skip comments
+            }
+            Some(t) => {
                 return Err(ParseError::UnexpectedToken(
-                    format!(
-                        "Unexpected token in service body: {:?}",
-                        token_with_location.token
-                    ),
-                    token_with_location.location,
-                ));
+                    format!("Unexpected token in service body: {:?}", t.token),
+                    t.location,
+                ))
             }
+            None => return Err(ParseError::UnexpectedEndOfInput(Location::new(0, 0))),
         }
     }
 
-    Err(ParseError::UnexpectedEndOfInput(open_brace_token.location))
+    Ok(Service {
+        name,
+        methods,
+        options,
+    })
 }
 
+fn parse_method<'a, I>(tokens: &mut Peekable<I>) -> Result<Method, ParseError>
+where
+    I: Iterator<Item = TokenWithLocation<'a>>,
+{
+    skip_comments_and_whitespace(tokens);
+
+    // Expect 'rpc' keyword
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::Rpc)?;
+
+    skip_comments_and_whitespace(tokens);
+
+    // Parse method name
+    let name = parse_identifier(tokens)?;
+
+    skip_comments_and_whitespace(tokens);
+
+    // Expect opening parenthesis
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::OpenParen)?;
+
+    skip_comments_and_whitespace(tokens);
+
+    // Check for 'stream' keyword
+    let mut client_streaming = false;
+    if let Some(TokenWithLocation {
+        token: Token::Stream,
+        ..
+    }) = tokens.peek()
+    {
+        client_streaming = true;
+        tokens.next(); // Consume 'stream' token
+        skip_comments_and_whitespace(tokens);
+    }
+
+    // Parse input type
+    let input_type = parse_type(tokens)?;
+
+    skip_comments_and_whitespace(tokens);
+
+    // Expect closing parenthesis
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::CloseParen)?;
+
+    skip_comments_and_whitespace(tokens);
+
+    // Expect 'returns' keyword
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::Returns)?;
+
+    skip_comments_and_whitespace(tokens);
+
+    // Expect opening parenthesis
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::OpenParen)?;
+
+    skip_comments_and_whitespace(tokens);
+
+    // Check for 'stream' keyword in return type
+    let mut server_streaming = false;
+    if let Some(TokenWithLocation {
+        token: Token::Stream,
+        ..
+    }) = tokens.peek()
+    {
+        server_streaming = true;
+        tokens.next(); // Consume 'stream' token
+        skip_comments_and_whitespace(tokens);
+    }
+
+    // Parse output type
+    let output_type = parse_type(tokens)?;
+
+    skip_comments_and_whitespace(tokens);
+
+    // Expect closing parenthesis
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::CloseParen)?;
+
+    skip_comments_and_whitespace(tokens);
+
+    let mut options = Vec::new();
+
+    // Check for options or semicolon
+    match tokens.peek() {
+        Some(TokenWithLocation {
+            token: Token::OpenBrace,
+            ..
+        }) => {
+            tokens.next(); // Consume '{'
+            while let Some(token) = tokens.peek() {
+                match token.token {
+                    Token::CloseBrace => {
+                        tokens.next(); // Consume '}'
+                        break;
+                    }
+                    Token::Option => {
+                        parse_option(tokens, &mut options)?;
+                    }
+                    Token::Comment(_) | Token::Whitespace => {
+                        tokens.next(); // Skip comments and whitespace
+                    }
+                    _ => {
+                        return Err(ParseError::UnexpectedToken(
+                            format!("Unexpected token in method options: {:?}", token.token),
+                            token.location,
+                        ))
+                    }
+                }
+                skip_comments_and_whitespace(tokens);
+            }
+        }
+        Some(TokenWithLocation {
+            token: Token::Semicolon,
+            ..
+        }) => {
+            tokens.next(); // Consume ';'
+        }
+        Some(t) => {
+            return Err(ParseError::UnexpectedToken(
+                format!(
+                    "Expected '{{' or ';' after method definition, found {:?}",
+                    t.token
+                ),
+                t.location,
+            ))
+        }
+        None => return Err(ParseError::UnexpectedEndOfInput(Location::new(0, 0))),
+    }
+
+    skip_comments_and_whitespace(tokens);
+
+    Ok(Method {
+        name,
+        input_type,
+        output_type,
+        client_streaming,
+        server_streaming,
+        options,
+    })
+}
 fn parse_option<'a, I>(
     tokens: &mut Peekable<I>,
     options: &mut Vec<ProtoOption>,
@@ -1053,37 +1263,86 @@ where
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
         .expect(Token::Option)?;
 
-    // Parse option name
-    let name_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(option_token.location))?;
+    // Parse option name (which may include dots)
+    let name = parse_dotted_identifier(tokens)?;
 
     // Expect equals sign
     tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(option_token.location))?
         .expect(Token::Equals)?;
 
     // Parse option value
-    let value = parse_constant(tokens)?;
+    let value = parse_option_value(tokens)?;
 
     // Expect semicolon
     tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(option_token.location))?
         .expect(Token::Semicolon)?;
 
-    options.push(ProtoOption {
-        name: name_token.token.to_string(),
-        value: OptionValue::String(value),
-    });
+    options.push(ProtoOption::new(name, value));
 
     Ok(())
 }
 
+fn parse_dotted_identifier<'a, I>(tokens: &mut Peekable<I>) -> Result<String, ParseError>
+where
+    I: Iterator<Item = TokenWithLocation<'a>>,
+{
+    let mut parts = Vec::new();
+
+    while let Some(token) = tokens.peek() {
+        match &token.token {
+            Token::Identifier(s) => {
+                parts.push(s.to_string());
+                tokens.next(); // Consume the identifier
+            }
+            Token::Dot => {
+                if parts.is_empty() {
+                    return Err(ParseError::UnexpectedToken(
+                        "Unexpected dot at the beginning of identifier".to_string(),
+                        token.location,
+                    ));
+                }
+                tokens.next(); // Consume the dot
+            }
+            _ => break,
+        }
+    }
+
+    if parts.is_empty() {
+        return Err(ParseError::UnexpectedEndOfInput(
+            tokens.peek().map_or(Location::new(0, 0), |t| t.location),
+        ));
+    }
+
+    Ok(parts.join("."))
+}
+
+fn parse_option_value<'a, I>(tokens: &mut Peekable<I>) -> Result<OptionValue, ParseError>
+where
+    I: Iterator<Item = TokenWithLocation<'a>>,
+{
+    let value_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
+
+    match &value_token.token {
+        Token::StringLiteral(s) => Ok(OptionValue::String(s.to_string())),
+        Token::Identifier(s) => Ok(OptionValue::Identifier(s.to_string())),
+        Token::IntLiteral(i) => Ok(OptionValue::Int(*i)),
+        Token::FloatLiteral(f) => Ok(OptionValue::Float(*f)),
+        _ => Err(ParseError::UnexpectedToken(
+            format!("Expected option value, found {:?}", value_token.token),
+            value_token.location,
+        )),
+    }
+}
+
 fn parse_field_type(token: &TokenWithLocation) -> Result<FieldType, ParseError> {
     match &token.token {
-        Token::Identifier(typ) => match *typ {
+        Token::Identifier(typ) | Token::FullyQualifiedIdentifier(typ) => match *typ {
             "double" => Ok(FieldType::Double),
             "float" => Ok(FieldType::Float),
             "int32" => Ok(FieldType::Int32),
@@ -1101,14 +1360,6 @@ fn parse_field_type(token: &TokenWithLocation) -> Result<FieldType, ParseError> 
             "bytes" => Ok(FieldType::Bytes),
             _ => Ok(FieldType::MessageOrEnum(typ.to_string())),
         },
-        Token::StringType => Ok(FieldType::String),
-        Token::Map => {
-            // Parse map key and value types
-            Err(ParseError::UnexpectedToken(
-                "Map types should be handled in parse_map_field".to_string(),
-                token.location,
-            ))
-        }
         _ => Err(ParseError::UnexpectedToken(
             format!("Expected field type, found {:?}", token.token),
             token.location,
@@ -1116,99 +1367,75 @@ fn parse_field_type(token: &TokenWithLocation) -> Result<FieldType, ParseError> 
     }
 }
 
-fn parse_method<'a, I>(tokens: &mut Peekable<I>) -> Result<Method, ParseError>
+fn parse_identifier<'a, I>(tokens: &mut Peekable<I>) -> Result<String, ParseError>
 where
     I: Iterator<Item = TokenWithLocation<'a>>,
 {
-    // Parse method name
-    let name_token = tokens
+    let token = tokens
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
 
-    // Expect opening parenthesis
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
-        .expect(Token::OpenParen)?;
+    match token.token {
+        Token::Identifier(s) => Ok(s.to_string()),
+        Token::FullyQualifiedIdentifier(s) => Ok(s.to_string()),
+        _ => Err(ParseError::UnexpectedToken(
+            format!("Expected identifier, found {:?}", token.token),
+            token.location,
+        )),
+    }
+}
 
-    // Parse input type
-    let input_type_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
-        .expect(Token::Identifier(&name_token.token.to_string()))?;
+fn parse_type<'a, I>(tokens: &mut Peekable<I>) -> Result<String, ParseError>
+where
+    I: Iterator<Item = TokenWithLocation<'a>>,
+{
+    let mut type_name = String::new();
+    let mut first = true;
 
-    // Expect closing parenthesis
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(input_type_token.location))?
-        .expect(Token::CloseParen)?;
-
-    // Expect 'returns' keyword
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(input_type_token.location))?
-        .expect(Token::Returns)?;
-
-    // Expect opening parenthesis
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(input_type_token.location))?
-        .expect(Token::OpenParen)?;
-
-    // Parse output type
-    let output_type_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(input_type_token.location))?;
-
-    // Expect closing parenthesis
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(output_type_token.location))?
-        .expect(Token::CloseParen)?;
-
-    let mut method = Method {
-        name: name_token.token.to_string(),
-        input_type: input_type_token.token.to_string(),
-        output_type: output_type_token.token.to_string(),
-        client_streaming: false,
-        server_streaming: false,
-        options: Vec::new(),
-    };
-
-    if let Some(token_with_location) = tokens.peek() {
-        if token_with_location.token == Token::OpenBrace {
-            tokens.next(); // Consume open brace
-            while let Some(token_with_location) = tokens.peek() {
-                match &token_with_location.token {
-                    Token::CloseBrace => {
-                        tokens.next(); // Consume closing brace
-                        break;
-                    }
-                    Token::Option => {
-                        parse_option(tokens, &mut method.options)?;
-                    }
-                    _ => {
-                        return Err(ParseError::UnexpectedToken(
-                            format!(
-                                "Unexpected token in method body: {:?}",
-                                token_with_location.token
-                            ),
-                            token_with_location.location,
-                        ))
-                    }
+    while let Some(token) = tokens.peek() {
+        match &token.token {
+            Token::Identifier(s) => {
+                if !first {
+                    type_name.push('.');
+                }
+                type_name.push_str(s);
+                first = false;
+                tokens.next(); // Consume the token
+            }
+            Token::FullyQualifiedIdentifier(s) => {
+                type_name = s.to_string();
+                tokens.next(); // Consume the token
+                break;
+            }
+            Token::Dot => {
+                if first {
+                    return Err(ParseError::UnexpectedToken(
+                        "Unexpected dot at the beginning of type name".to_string(),
+                        token.location,
+                    ));
+                }
+                type_name.push('.');
+                tokens.next(); // Consume the dot
+            }
+            _ => {
+                if first {
+                    return Err(ParseError::UnexpectedToken(
+                        format!("Expected type name, found {:?}", token.token),
+                        token.location,
+                    ));
+                } else {
+                    // We've reached the end of the type name
+                    break;
                 }
             }
-        } else {
-            tokens
-                .next()
-                .ok_or_else(|| ParseError::UnexpectedEndOfInput(output_type_token.location))?
-                .expect(Token::Semicolon)?;
         }
-    } else {
-        return Err(ParseError::UnexpectedEndOfInput(output_type_token.location));
     }
 
-    Ok(method)
+    if type_name.is_empty() {
+        Err(ParseError::UnexpectedEndOfInput(Location::new(0, 0)))
+    } else {
+        Ok(type_name)
+    }
 }
 
 fn parse_reserved<'a, I>(

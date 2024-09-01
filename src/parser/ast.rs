@@ -11,15 +11,32 @@ pub enum Reserved {
     FieldName(String),
 }
 
+// Examples for possible OptionValue enum members:
+// Identifier: option foo = bar;
+// String: option foo = "bar";
+// Int: option foo = 42;
+// Float: option foo = 3.14;
+// Bool: option foo = true;
+// List: option foo = [1, 2, 3];
+// Map: option foo = {key: "value", another_key: 123};
+// Enum: option foo = ENUM_VALUE;
+// Message: option (google.api.http) = {
+//     get: "/v1/messages/{message_id}"
+//     additional_bindings {
+//         get: "/v1/users/{user_id}/messages/{message_id}"
+//     }
+// };
 #[derive(Debug, Clone, PartialEq)]
 pub enum OptionValue {
     Identifier(String),
     String(String),
     Int(i64),
     Float(f64),
-    Boolean(bool),
+    Bool(bool),
     List(Vec<OptionValue>),
     Map(Vec<(OptionValue, OptionValue)>),
+    Enum(String, String),                // (enum type, enum value)
+    Message(Vec<(String, OptionValue)>), // For nested message options
 }
 
 #[derive(Debug, Clone, PartialEq)]

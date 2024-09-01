@@ -1,0 +1,161 @@
+syntax: Proto3,
+package: Some(
+    "logd.v1",
+),
+imports: [
+    Import {
+        path: "third-party/java/remote-apis/google/rpc/status.proto",
+        kind: Default,
+    },
+],
+options: [
+    ProtoOption {
+        name: "java_multiple_files",
+        value: Identifier(
+            "true",
+        ),
+    },
+    ProtoOption {
+        name: "java_package",
+        value: String(
+            "com.facebook.buck.logd.proto",
+        ),
+    },
+    ProtoOption {
+        name: "java_outer_classname",
+        value: String(
+            "LogdServiceOuterFile",
+        ),
+    },
+],
+messages: [
+    Message {
+        name: "CreateLogRequest",
+        fields: [
+            Field {
+                name: "logFilePath",
+                number: 1,
+                label: Optional,
+                typ: String,
+                options: [],
+            },
+            Field {
+                name: "logType",
+                number: 2,
+                label: Optional,
+                typ: MessageOrEnum(
+                    "LogType",
+                ),
+                options: [],
+            },
+        ],
+        oneofs: [],
+        nested_messages: [],
+        nested_enums: [],
+        options: [],
+        reserved: [],
+    },
+    Message {
+        name: "CreateLogResponse",
+        fields: [
+            Field {
+                name: "logId",
+                number: 1,
+                label: Optional,
+                typ: Int32,
+                options: [],
+            },
+        ],
+        oneofs: [],
+        nested_messages: [],
+        nested_enums: [],
+        options: [],
+        reserved: [],
+    },
+    Message {
+        name: "LogMessage",
+        fields: [
+            Field {
+                name: "logId",
+                number: 1,
+                label: Optional,
+                typ: Int32,
+                options: [],
+            },
+            Field {
+                name: "logMessage",
+                number: 2,
+                label: Optional,
+                typ: String,
+                options: [],
+            },
+        ],
+        oneofs: [],
+        nested_messages: [],
+        nested_enums: [],
+        options: [],
+        reserved: [],
+    },
+],
+enums: [
+    Enum {
+        name: "LogType",
+        values: [
+            EnumValue {
+                name: "BUCK_LOG",
+                number: 0,
+                options: [],
+            },
+            EnumValue {
+                name: "BUCK_MACHINE_LOG",
+                number: 1,
+                options: [],
+            },
+            EnumValue {
+                name: "CHROME_TRACE_LOG",
+                number: 2,
+                options: [],
+            },
+            EnumValue {
+                name: "SIMPLE_CONSOLE_LOG",
+                number: 3,
+                options: [],
+            },
+            EnumValue {
+                name: "CRITICAL_PATH_LOG",
+                number: 4,
+                options: [],
+            },
+            EnumValue {
+                name: "RULE_KEY_LOG",
+                number: 5,
+                options: [],
+            },
+        ],
+        options: [],
+    },
+],
+services: [
+    Service {
+        name: "LogdService",
+        methods: [
+            Method {
+                name: "CreateLogFile",
+                input_type: "CreateLogRequest",
+                output_type: "CreateLogResponse",
+                client_streaming: false,
+                server_streaming: false,
+                options: [],
+            },
+            Method {
+                name: "OpenLog",
+                input_type: "LogMessage",
+                output_type: "google.rpc.Status",
+                client_streaming: true,
+                server_streaming: false,
+                options: [],
+            },
+        ],
+        options: [],
+    },
+],
