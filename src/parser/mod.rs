@@ -1200,7 +1200,7 @@ where
         }) => {
             tokens.next(); // Consume '{'
             while let Some(token) = tokens.peek() {
-                match token.token {
+                match &token.token {
                     Token::CloseBrace => {
                         tokens.next(); // Consume '}'
                         break;
@@ -1239,8 +1239,6 @@ where
         None => return Err(ParseError::UnexpectedEndOfInput(Location::new(0, 0))),
     }
 
-    skip_comments_and_whitespace(tokens);
-
     Ok(Method {
         name,
         input_type,
@@ -1250,6 +1248,7 @@ where
         options,
     })
 }
+
 fn parse_option<'a, I>(
     tokens: &mut Peekable<I>,
     options: &mut Vec<ProtoOption>,
@@ -1392,41 +1391,64 @@ where
     let mut type_name = String::new();
     let mut first = true;
 
-    while let Some(token) = tokens.peek() {
-        match &token.token {
-            Token::Identifier(s) => {
+    loop {
+        skip_comments_and_whitespace(tokens);
+
+        match tokens.peek() {
+            Some(TokenWithLocation {
+                token: Token::Identifier(s),
+                ..
+            }) => {
                 if !first {
                     type_name.push('.');
                 }
                 type_name.push_str(s);
                 first = false;
-                tokens.next(); // Consume the token
+                tokens.next(); // Consume the identifier
             }
-            Token::FullyQualifiedIdentifier(s) => {
+            Some(TokenWithLocation {
+                token: Token::FullyQualifiedIdentifier(s),
+                ..
+            }) => {
                 type_name = s.to_string();
-                tokens.next(); // Consume the token
+                tokens.next(); // Consume the fully qualified identifier
                 break;
             }
-            Token::Dot => {
+            Some(TokenWithLocation {
+                token: Token::Dot, ..
+            }) => {
                 if first {
                     return Err(ParseError::UnexpectedToken(
                         "Unexpected dot at the beginning of type name".to_string(),
-                        token.location,
+                        tokens.peek().unwrap().location,
                     ));
                 }
                 type_name.push('.');
                 tokens.next(); // Consume the dot
             }
-            _ => {
-                if first {
-                    return Err(ParseError::UnexpectedToken(
-                        format!("Expected type name, found {:?}", token.token),
-                        token.location,
-                    ));
-                } else {
-                    // We've reached the end of the type name
-                    break;
+            Some(TokenWithLocation {
+                token: Token::Rpc, ..
+            }) => {
+                // Special case: 'rpc' is part of the type name (e.g., google.rpc.Status)
+                if !first {
+                    type_name.push('.');
                 }
+                type_name.push_str("rpc");
+                tokens.next(); // Consume the 'rpc' token
+            }
+            Some(TokenWithLocation {
+                token: Token::CloseParen,
+                ..
+            })
+            | None => {
+                // End of type name
+                break;
+            }
+            Some(t) => {
+                return Err(ParseError::UnexpectedToken(
+                    format!("Unexpected token in type name: {:?}", t.token),
+                    t.location,
+                ));
             }
         }
     }
