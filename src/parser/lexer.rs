@@ -1,5 +1,5 @@
 use super::{error::Location, ParseError};
-use log::{debug, trace};
+
 use nom::{
     branch::alt,
     bytes::complete::{tag, take, take_while, take_while1},
@@ -313,7 +313,7 @@ fn parse_comment(input: &str) -> IResult<&str, Token> {
         map(
             recognize(delimited(
                 tag("/*"),
-                take_while(|c| c != '*' || input.chars().next() != Some('/')),
+                take_while(|c| c != '*' || !input.starts_with('/')),
                 tag("*/"),
             )),
             Token::Comment,

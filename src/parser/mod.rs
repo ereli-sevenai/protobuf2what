@@ -92,7 +92,7 @@ where
                 tokens.next(); // Skip comments
             }
             _ => {
-                let loc = current_token.location.clone();
+                let loc = current_token.location;
                 return Err(ParseError::UnexpectedToken(
                     format!("{:?}", current_token.token),
                     loc,
@@ -163,7 +163,7 @@ where
     // Expect '=' token
     let equals_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(syntax_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(syntax_token.location))?;
     if equals_token.token != Token::Equals {
         return Err(ParseError::UnexpectedToken(
             format!("Expected '=', found {:?}", equals_token.token),
@@ -174,7 +174,7 @@ where
     // Parse syntax version
     let version_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(equals_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(equals_token.location))?;
     debug!("Parsing syntax version: {:?}", version_token);
     match version_token.token {
         Token::StringLiteral("proto2") => proto_file.syntax = Syntax::Proto2,
@@ -287,7 +287,7 @@ where
     // Expect semicolon
     tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(package_token.location))?
+        .ok_or(ParseError::UnexpectedEndOfInput(package_token.location))?
         .expect(Token::Semicolon)?;
 
     proto_file.package = Some(package_name);
@@ -329,7 +329,7 @@ where
     let mut kind = ImportKind::Default;
     let next_token = tokens
         .peek()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(import_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(import_token.location))?;
 
     match next_token.token {
         Token::Public => {
@@ -346,7 +346,7 @@ where
     // Parse import path
     let path_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(import_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(import_token.location))?;
     let path = match path_token.token {
         Token::StringLiteral(path) => path.to_string(),
         Token::Identifier(path) | Token::FullyQualifiedIdentifier(path) => path.to_string(),
@@ -364,7 +364,7 @@ where
     // Expect semicolon
     let semicolon_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(path_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(path_token.location))?;
     if semicolon_token.token != Token::Semicolon {
         return Err(ParseError::UnexpectedToken(
             format!("Expected ';', found {:?}", semicolon_token.token),
@@ -413,7 +413,7 @@ where
     // Expect message name
     let name_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(message_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(message_token.location))?;
     let name = match &name_token.token {
         Token::Identifier(s) | Token::FullyQualifiedIdentifier(s) => s.to_string(),
         _ => {
@@ -427,7 +427,7 @@ where
     // Expect opening brace
     let open_brace_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(name_token.location))?;
     if open_brace_token.token != Token::OpenBrace {
         return Err(ParseError::UnexpectedToken(
             format!("Expected '{{', found {:?}", open_brace_token.token),
@@ -438,7 +438,7 @@ where
     let mut message = Message::new(name);
 
     // Parse message body
-    while let Some(token_with_location) = tokens.peek() {
+    while let Some(_token_with_location) = tokens.peek() {
         skip_comments_and_whitespace(tokens);
 
         if let Some(token_with_location) = tokens.peek() {
@@ -523,7 +523,7 @@ where
     // Parse field type
     let type_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(start_location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(start_location))?;
 
     debug!("Parsing field type: {:?}", type_token);
 
@@ -535,13 +535,13 @@ where
     // Expect '=' token
     tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(start_location))?
+        .ok_or(ParseError::UnexpectedEndOfInput(start_location))?
         .expect(Token::Equals)?;
 
     // Parse field number
     let number_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(start_location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(start_location))?;
     let number = match number_token.token {
         Token::IntLiteral(num) => num,
         _ => {
@@ -555,7 +555,7 @@ where
     // Expect semicolon
     tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(start_location))?
+        .ok_or(ParseError::UnexpectedEndOfInput(start_location))?
         .expect(Token::Semicolon)?;
 
     Ok(Field {
@@ -745,7 +745,7 @@ where
     // Parse enum name
     let name_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(enum_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(enum_token.location))?;
     let name = match &name_token.token {
         Token::Identifier(name) | Token::FullyQualifiedIdentifier(name) => name.to_string(),
         _ => {
@@ -759,7 +759,7 @@ where
     // Expect opening brace
     let open_brace_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(name_token.location))?;
     if open_brace_token.token != Token::OpenBrace {
         return Err(ParseError::UnexpectedToken(
             format!("Expected '{{', found {:?}", open_brace_token.token),
@@ -812,7 +812,7 @@ where
     // Parse option name
     let name_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(option_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(option_token.location))?;
     let name = match &name_token.token {
         Token::Identifier(s) | Token::FullyQualifiedIdentifier(s) => s.to_string(),
         _ => {
@@ -826,13 +826,13 @@ where
     // Expect equals sign
     tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?
+        .ok_or(ParseError::UnexpectedEndOfInput(name_token.location))?
         .expect(Token::Equals)?;
 
     // Parse option value
     let value_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(name_token.location))?;
     let value = match &value_token.token {
         Token::StringLiteral(s) => EnumValueOptionValue::String(s.to_string()),
         Token::Identifier(s) => EnumValueOptionValue::Identifier(s.to_string()),
@@ -849,7 +849,7 @@ where
     // Expect semicolon
     tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(value_token.location))?
+        .ok_or(ParseError::UnexpectedEndOfInput(value_token.location))?
         .expect(Token::Semicolon)?;
 
     Ok(EnumValueOption { name, value })
@@ -889,7 +889,7 @@ where
     // Expect '='
     let equals_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(name_token.location))?;
     if equals_token.token != Token::Equals {
         return Err(ParseError::UnexpectedToken(
             format!("Expected '=', found {:?}", equals_token.token),
@@ -900,7 +900,7 @@ where
     // Parse enum value number
     let number_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(equals_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(equals_token.location))?;
     let number = match &number_token.token {
         Token::IntLiteral(num) => *num,
         _ => {
@@ -951,7 +951,7 @@ where
     // Expect semicolon
     let semicolon_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(number_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(number_token.location))?;
     if semicolon_token.token != Token::Semicolon {
         return Err(ParseError::UnexpectedToken(
             format!("Expected ';', found {:?}", semicolon_token.token),
@@ -987,7 +987,7 @@ where
     // Expect '='
     let equals_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(name_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(name_token.location))?;
     if equals_token.token != Token::Equals {
         return Err(ParseError::UnexpectedToken(
             format!("Expected '=', found {:?}", equals_token.token),
@@ -998,7 +998,7 @@ where
     // Parse option value
     let value_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(equals_token.location))?;
+        .ok_or(ParseError::UnexpectedEndOfInput(equals_token.location))?;
     let value = match &value_token.token {
         Token::StringLiteral(s) => EnumValueOptionValue::String(s.to_string()),
         Token::Identifier(s) => EnumValueOptionValue::Identifier(s.to_string()),
@@ -1260,7 +1260,7 @@ where
     // Expect equals sign
     tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(option_token.location))?
+        .ok_or(ParseError::UnexpectedEndOfInput(option_token.location))?
         .expect(Token::Equals)?;
 
     // Parse option value
@@ -1269,7 +1269,7 @@ where
     // Expect semicolon
     tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(option_token.location))?
+        .ok_or(ParseError::UnexpectedEndOfInput(option_token.location))?
         .expect(Token::Semicolon)?;
 
     options.push(ProtoOption::new(name, value));
