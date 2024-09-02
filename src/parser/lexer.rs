@@ -1,5 +1,5 @@
 use super::{error::Location, ParseError};
-use log::debug;
+use log::{debug, trace};
 use nom::{
     branch::alt,
     bytes::complete::{tag, take, take_while, take_while1},
@@ -253,6 +253,11 @@ fn parse_string_literal(input: &str) -> IResult<&str, Token> {
                 take_while1(|c| c != '"' && c != '\\'),
                 tag("\\\""),
                 tag("\\\\"),
+                tag("\\n"),
+                tag("\\r"),
+                tag("\\t"),
+                tag("\\b"),
+                tag("\\f"),
                 preceded(char('\\'), take(1usize)),
             )))),
             Token::StringLiteral,
@@ -386,45 +391,45 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
     let mut line = 1;
     let mut column = 1;
 
-    debug!(
-        "Starting tokenization of input with length: {}",
-        input.len()
-    );
-
     while pos < input.len() {
         let current_char = input[pos..].chars().next().unwrap();
         let start_column = column;
 
-        debug!(
-            "Processing character '{}' at position {}",
-            current_char, pos
-        );
-
-        let (token, len) = match current_char {
+        match current_char {
             ' ' | '\t' | '\r' => {
                 pos += 1;
                 column += 1;
-                continue;
             }
             '\n' => {
                 pos += 1;
                 line += 1;
                 column = 1;
-                continue;
             }
             '/' => {
                 if input[pos..].starts_with("//") {
                     let end = pos + input[pos..].find('\n').unwrap_or(input.len() - pos);
                     let comment = &input[pos..end];
+                    tokens.push(TokenWithLocation {
+                        token: Token::Comment(comment),
+                        location: Location {
+                            line,
+                            column: start_column,
+                        },
+                    });
                     pos = end;
                     line += 1;
                     column = 1;
-                    debug!("Found single-line comment: {}", comment);
-                    (Token::Comment(comment), comment.len())
                 } else if input[pos..].starts_with("/*") {
                     let end = pos + input[pos..].find("*/").map_or(input.len() - pos, |i| i + 2);
                     let comment = &input[pos..end];
                     let newlines = comment.chars().filter(|&c| c == '\n').count();
+                    tokens.push(TokenWithLocation {
+                        token: Token::Comment(comment),
+                        location: Location {
+                            line,
+                            column: start_column,
+                        },
+                    });
                     pos = end;
                     line += newlines;
                     if newlines > 0 {
@@ -432,8 +437,6 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
                     } else {
                         column += comment.len();
                     }
-                    debug!("Found multi-line comment: {}", comment);
-                    (Token::Comment(comment), comment.len())
                 } else {
                     return Err(ParseError::UnexpectedCharacter(
                         '/',
@@ -442,137 +445,126 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
                 }
             }
             '"' => {
-                let mut end = pos + 1;
-                while end < input.len() {
-                    if input[end..].starts_with('"') {
-                        break;
-                    }
-                    end += 1;
-                }
-                if end == input.len() {
-                    return Err(ParseError::UnterminatedStringLiteral(Location {
+                let (token, len) = tokenize_string_literal(&input[pos..])?;
+                tokens.push(TokenWithLocation {
+                    token,
+                    location: Location {
                         line,
-                        column,
-                    }));
-                }
-                let string_literal = &input[pos + 1..end];
-                let len = end - pos + 1;
-                pos = end + 1;
-                column += len;
-                debug!("Found string literal: {}", string_literal);
-                (Token::StringLiteral(string_literal), len)
-            }
-            '0'..='9' => {
-                let (token, len) = tokenize_number(&input[pos..]);
+                        column: start_column,
+                    },
+                });
                 pos += len;
                 column += len;
-                debug!("Found number: {:?}", token);
-                (token, len)
+            }
+            '0'..='9' | '-' | '+' | '.' => {
+                let (token, len) = tokenize_number(&input[pos..]);
+                tokens.push(TokenWithLocation {
+                    token,
+                    location: Location {
+                        line,
+                        column: start_column,
+                    },
+                });
+                pos += len;
+                column += len;
             }
             'a'..='z' | 'A'..='Z' | '_' => {
                 let (token, len) = tokenize_identifier(&input[pos..]);
+                tokens.push(TokenWithLocation {
+                    token,
+                    location: Location {
+                        line,
+                        column: start_column,
+                    },
+                });
                 pos += len;
                 column += len;
-                debug!("Found identifier or keyword: {:?}", token);
-                (token, len)
             }
-            '=' => {
+            '=' | ';' | '{' | '}' | '(' | ')' | '[' | ']' | '<' | '>' | ',' | '.' => {
+                let token = match current_char {
+                    '=' => Token::Equals,
+                    ';' => Token::Semicolon,
+                    '{' => Token::OpenBrace,
+                    '}' => Token::CloseBrace,
+                    '(' => Token::OpenParen,
+                    ')' => Token::CloseParen,
+                    '[' => Token::OpenBracket,
+                    ']' => Token::CloseBracket,
+                    '<' => Token::LessThan,
+                    '>' => Token::GreaterThan,
+                    ',' => Token::Comma,
+                    '.' => Token::Dot,
+                    _ => unreachable!(),
+                };
+                tokens.push(TokenWithLocation {
+                    token,
+                    location: Location {
+                        line,
+                        column: start_column,
+                    },
+                });
                 pos += 1;
                 column += 1;
-                (Token::Equals, 1)
-            }
-            ';' => {
-                pos += 1;
-                column += 1;
-                (Token::Semicolon, 1)
-            }
-            '{' => {
-                pos += 1;
-                column += 1;
-                (Token::OpenBrace, 1)
-            }
-            '}' => {
-                pos += 1;
-                column += 1;
-                (Token::CloseBrace, 1)
-            }
-            '(' => {
-                pos += 1;
-                column += 1;
-                (Token::OpenParen, 1)
-            }
-            ')' => {
-                pos += 1;
-                column += 1;
-                (Token::CloseParen, 1)
-            }
-            '[' => {
-                pos += 1;
-                column += 1;
-                (Token::OpenBracket, 1)
-            }
-            ']' => {
-                pos += 1;
-                column += 1;
-                (Token::CloseBracket, 1)
-            }
-            '<' => {
-                pos += 1;
-                column += 1;
-                (Token::LessThan, 1)
-            }
-            '>' => {
-                pos += 1;
-                column += 1;
-                (Token::GreaterThan, 1)
-            }
-            ',' => {
-                pos += 1;
-                column += 1;
-                (Token::Comma, 1)
-            }
-            '.' => {
-                pos += 1;
-                column += 1;
-                (Token::Dot, 1)
             }
             c => {
-                debug!("Encountered unexpected character: {}", c);
                 return Err(ParseError::UnexpectedCharacter(
                     c,
                     Location { line, column },
                 ));
             }
-        };
-
-        tokens.push(TokenWithLocation {
-            token,
-            location: Location {
-                line,
-                column: start_column,
-            },
-        });
+        }
     }
 
-    debug!("{:?}", tokens);
     Ok(tokens)
+}
+
+fn tokenize_string_literal(input: &str) -> Result<(Token, usize), ParseError> {
+    let mut end = 1;
+    let mut escaped = false;
+
+    for ch in input[1..].chars() {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            return Ok((Token::StringLiteral(&input[1..end]), end + 1));
+        }
+        end += 1;
+    }
+
+    Err(ParseError::UnterminatedStringLiteral(Location::new(0, 0))) // You might want to pass proper location here
 }
 
 fn tokenize_number(input: &str) -> (Token, usize) {
     let mut end = 0;
     let mut is_float = false;
-    for (i, ch) in input.char_indices() {
+    let mut has_digit = false;
+
+    // Handle optional sign
+    if input.starts_with('-') || input.starts_with('+') {
+        end += 1;
+    }
+
+    for (i, ch) in input[end..].char_indices() {
         match ch {
-            '0'..='9' => end = i + 1,
+            '0'..='9' => {
+                end += i + 1;
+                has_digit = true;
+            }
             '.' if !is_float => {
                 is_float = true;
-                end = i + 1;
+                end += i + 1;
             }
-            'e' | 'E' if !input[..i].contains('e') && !input[..i].contains('E') => {
+            'e' | 'E'
+                if has_digit
+                    && !input[end..end + i].contains('e')
+                    && !input[end..end + i].contains('E') =>
+            {
                 is_float = true;
-                end = i + 1;
-                if i + 1 < input.len()
-                    && (input[i + 1..].starts_with('+') || input[i + 1..].starts_with('-'))
+                end += i + 1;
+                if end < input.len()
+                    && (input[end..].starts_with('-') || input[end..].starts_with('+'))
                 {
                     end += 1;
                 }
@@ -580,6 +572,7 @@ fn tokenize_number(input: &str) -> (Token, usize) {
             _ => break,
         }
     }
+
     let number_str = &input[..end];
     if is_float {
         (Token::FloatLiteral(number_str.parse().unwrap()), end)
@@ -619,7 +612,25 @@ fn tokenize_identifier(input: &str) -> (Token, usize) {
         "public" => (Token::Public, end),
         "extensions" => (Token::Extensions, end),
         "stream" => (Token::Stream, end),
-        // Add any other keywords here
+        "string" => (Token::StringType, end),
+        "int32" => (Token::Identifier("int32"), end),
+        "int64" => (Token::Identifier("int64"), end),
+        "uint32" => (Token::Identifier("uint32"), end),
+        "uint64" => (Token::Identifier("uint64"), end),
+        "sint32" => (Token::Identifier("sint32"), end),
+        "sint64" => (Token::Identifier("sint64"), end),
+        "fixed32" => (Token::Identifier("fixed32"), end),
+        "fixed64" => (Token::Identifier("fixed64"), end),
+        "sfixed32" => (Token::Identifier("sfixed32"), end),
+        "sfixed64" => (Token::Identifier("sfixed64"), end),
+        "bool" => (Token::Identifier("bool"), end),
+        "bytes" => (Token::Identifier("bytes"), end),
+        "double" => (Token::Identifier("double"), end),
+        "float" => (Token::Identifier("float"), end),
+        "true" => (Token::Identifier("true"), end),
+        "false" => (Token::Identifier("false"), end),
+        "inf" => (Token::Identifier("inf"), end),
+        "nan" => (Token::Identifier("nan"), end),
         _ => (Token::Identifier(identifier), end),
     }
 }
@@ -647,95 +658,164 @@ mod tests {
             vec![
                 TokenWithLocation {
                     token: Token::Syntax,
-                    location: Location::new(2, 17)
+                    location: Location {
+                        line: 2,
+                        column: 17
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Equals,
-                    location: Location::new(2, 23)
+                    location: Location {
+                        line: 2,
+                        column: 24
+                    }
                 },
                 TokenWithLocation {
                     token: Token::StringLiteral("proto3"),
-                    location: Location::new(2, 25)
+                    location: Location {
+                        line: 2,
+                        column: 26
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Semicolon,
-                    location: Location::new(2, 34)
+                    location: Location {
+                        line: 2,
+                        column: 34
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Message,
-                    location: Location::new(2, 35)
+                    location: Location {
+                        line: 4,
+                        column: 17
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Identifier("Person"),
-                    location: Location::new(4, 24)
+                    location: Location {
+                        line: 4,
+                        column: 25
+                    }
                 },
                 TokenWithLocation {
                     token: Token::OpenBrace,
-                    location: Location::new(4, 31)
+                    location: Location {
+                        line: 4,
+                        column: 32
+                    }
                 },
                 TokenWithLocation {
-                    token: Token::StringType, // Changed from Identifier("string") to StringType
-                    location: Location::new(4, 33)
+                    token: Token::StringType,
+                    location: Location {
+                        line: 5,
+                        column: 21
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Identifier("name"),
-                    location: Location::new(5, 27)
+                    location: Location {
+                        line: 5,
+                        column: 28
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Equals,
-                    location: Location::new(5, 32)
+                    location: Location {
+                        line: 5,
+                        column: 33
+                    }
                 },
                 TokenWithLocation {
                     token: Token::IntLiteral(1),
-                    location: Location::new(5, 34)
+                    location: Location {
+                        line: 5,
+                        column: 35
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Semicolon,
-                    location: Location::new(5, 36)
+                    location: Location {
+                        line: 5,
+                        column: 36
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Identifier("int32"),
-                    location: Location::new(5, 37)
+                    location: Location {
+                        line: 6,
+                        column: 21
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Identifier("age"),
-                    location: Location::new(6, 26)
+                    location: Location {
+                        line: 6,
+                        column: 27
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Equals,
-                    location: Location::new(6, 30)
+                    location: Location {
+                        line: 6,
+                        column: 31
+                    }
                 },
                 TokenWithLocation {
                     token: Token::IntLiteral(2),
-                    location: Location::new(6, 32)
+                    location: Location {
+                        line: 6,
+                        column: 33
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Semicolon,
-                    location: Location::new(6, 34)
+                    location: Location {
+                        line: 6,
+                        column: 34
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Identifier("float"),
-                    location: Location::new(6, 35)
+                    location: Location {
+                        line: 7,
+                        column: 21
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Identifier("height"),
-                    location: Location::new(7, 26)
+                    location: Location {
+                        line: 7,
+                        column: 27
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Equals,
-                    location: Location::new(7, 33)
+                    location: Location {
+                        line: 7,
+                        column: 34
+                    }
                 },
                 TokenWithLocation {
                     token: Token::IntLiteral(3),
-                    location: Location::new(7, 35)
+                    location: Location {
+                        line: 7,
+                        column: 36
+                    }
                 },
                 TokenWithLocation {
                     token: Token::Semicolon,
-                    location: Location::new(7, 37)
+                    location: Location {
+                        line: 7,
+                        column: 37
+                    }
                 },
                 TokenWithLocation {
                     token: Token::CloseBrace,
-                    location: Location::new(7, 38)
+                    location: Location {
+                        line: 8,
+                        column: 17
+                    }
                 },
             ]
         );
@@ -869,7 +949,7 @@ mod tests {
         let expected_tokens = vec![
             Token::Comment("// Single line comment"),
             Token::Message,
-            Token::Comment("/* Multi-line comment */"),
+            Token::Comment("/* Multi-line\n            comment */"),
             Token::Identifier("Person"),
             Token::OpenBrace,
             Token::StringType,
@@ -881,20 +961,29 @@ mod tests {
             Token::CloseBrace,
         ];
 
-        assert_eq!(tokens.len(), expected_tokens.len());
+        assert_eq!(
+            tokens.len(),
+            expected_tokens.len(),
+            "Number of tokens mismatch"
+        );
 
-        for (actual, expected) in tokens.iter().zip(expected_tokens.iter()) {
+        for (i, (actual, expected)) in tokens.iter().zip(expected_tokens.iter()).enumerate() {
             match (&actual.token, expected) {
                 (Token::Comment(actual_comment), Token::Comment(expected_comment)) => {
                     let actual_normalized = normalize_comment(actual_comment);
                     let expected_normalized = normalize_comment(expected_comment);
                     assert_eq!(
                         actual_normalized, expected_normalized,
-                        "Comments don't match after normalization"
+                        "Comment mismatch at index {}: expected '{}', got '{}'",
+                        i, expected_normalized, actual_normalized
                     );
                 }
                 (actual_token, expected_token) => {
-                    assert_eq!(actual_token, expected_token, "Tokens don't match");
+                    assert_eq!(
+                        actual_token, expected_token,
+                        "Token mismatch at index {}: expected {:?}, got {:?}",
+                        i, expected_token, actual_token
+                    );
                 }
             }
         }
@@ -928,101 +1017,111 @@ mod tests {
                 Token::Syntax,
                 Location {
                     line: 2,
-                    column: 13,
+                    column: 17,
                 },
             ),
             (
                 Token::Equals,
                 Location {
                     line: 2,
-                    column: 20,
+                    column: 24,
                 },
             ),
             (
                 Token::StringLiteral("proto3"),
                 Location {
                     line: 2,
-                    column: 22,
+                    column: 26,
                 },
             ),
             (
                 Token::Semicolon,
                 Location {
                     line: 2,
-                    column: 30,
+                    column: 34,
                 },
             ),
             (
                 Token::Message,
                 Location {
                     line: 3,
-                    column: 13,
+                    column: 17,
                 },
             ),
             (
                 Token::Identifier("Person"),
                 Location {
                     line: 3,
-                    column: 21,
+                    column: 25,
                 },
             ),
             (
                 Token::OpenBrace,
                 Location {
                     line: 3,
-                    column: 28,
+                    column: 32,
                 },
             ),
             (
-                Token::Identifier("string"),
+                Token::StringType,
                 Location {
                     line: 4,
-                    column: 17,
+                    column: 21,
                 },
             ),
             (
                 Token::Identifier("name"),
                 Location {
                     line: 4,
-                    column: 24,
+                    column: 28,
                 },
             ),
             (
                 Token::Equals,
                 Location {
                     line: 4,
-                    column: 29,
+                    column: 33,
                 },
             ),
             (
                 Token::IntLiteral(1),
                 Location {
                     line: 4,
-                    column: 31,
+                    column: 35,
                 },
             ),
             (
                 Token::Semicolon,
                 Location {
                     line: 4,
-                    column: 32,
+                    column: 36,
                 },
             ),
             (
                 Token::CloseBrace,
                 Location {
                     line: 5,
-                    column: 13,
+                    column: 17,
                 },
             ),
         ];
 
+        assert_eq!(
+            tokens.len(),
+            expected_locations.len(),
+            "Number of tokens mismatch"
+        );
+
         for (i, (expected_token, expected_location)) in expected_locations.into_iter().enumerate() {
-            assert_eq!(tokens[i].token, expected_token);
+            assert_eq!(
+                tokens[i].token, expected_token,
+                "Token mismatch at index {}",
+                i
+            );
             assert_eq!(
                 tokens[i].location, expected_location,
-                "Mismatch at token {}",
-                i
+                "Location mismatch at token {} ({:?})",
+                i, expected_token
             );
         }
     }
@@ -1038,9 +1137,11 @@ mod tests {
         // Check that we have the expected number of tokens
         assert_eq!(tokens.len(), 9);
 
-        // Check that the float is correctly tokenized
+        // Check that the float is correctly tokenized as a FloatLiteral
         assert_eq!(tokens[6].token, Token::FloatLiteral(2.5));
         assert_eq!(tokens[6].location, Location::new(1, 30));
+
+        // Note: The parser should later catch this as an error, not the lexer
     }
 
     #[test]

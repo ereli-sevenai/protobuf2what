@@ -111,13 +111,13 @@ impl fmt::Display for ParseError {
                 write!(f, "Expected token: {} at {}", token, loc)
             }
             ParseError::UnexpectedToken(token, loc) => {
-                write!(f, "Unexpected token '{}' at {}", token, loc)
+                write!(f, "Unexpected token: {} at {}", token, loc)
             }
             ParseError::UnexpectedEndOfInput(loc) => {
                 write!(f, "Unexpected end of input at {}", loc)
             }
-            ParseError::InvalidSyntax(msg, loc) => {
-                write!(f, "Invalid syntax, found: {} at {}", msg, loc)
+            ParseError::InvalidSyntax(msg, _) => {
+                write!(f, "Invalid syntax: {}", msg)
             }
             ParseError::UnterminatedStringLiteral(loc) => {
                 write!(f, "Unterminated string literal at {}", loc)
@@ -226,7 +226,7 @@ mod tests {
         );
         assert_eq!(
             format!("{}", error),
-            "Unexpected token: Found 'int', expected 'string'"
+            "Unexpected token: Found 'int', expected 'string' at line 1, column 1"
         );
     }
 
@@ -271,6 +271,9 @@ mod tests {
             line: 15,
             column: 1,
         });
-        assert_eq!(format!("{}", error), "Unexpected end of input");
+        assert_eq!(
+            format!("{}", error),
+            "Unexpected end of input at line 15, column 1"
+        );
     }
 }

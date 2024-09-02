@@ -61,7 +61,7 @@ where
     // Skip initial comments
     skip_comments_and_whitespace(&mut tokens);
 
-    // Parse syntax (required)
+    // required
     parse_syntax(&mut tokens, &mut proto_file)?;
 
     // Parse options that might follow syntax
@@ -525,20 +525,12 @@ where
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(start_location))?;
 
-    let (typ, name) = match type_token.token {
-        Token::Map => parse_map_field(tokens)?,
-        Token::Identifier(_) | Token::FullyQualifiedIdentifier(_) => {
-            let typ = parse_field_type(&type_token)?;
-            let name = parse_field_name(tokens)?;
-            (typ, name)
-        }
-        _ => {
-            return Err(ParseError::UnexpectedToken(
-                format!("Expected field type, found {:?}", type_token.token),
-                type_token.location,
-            ));
-        }
-    };
+    debug!("Parsing field type: {:?}", type_token);
+
+    let typ = parse_field_type(&type_token)?;
+
+    // Parse field name
+    let name = parse_field_name(tokens)?;
 
     // Expect '=' token
     tokens
@@ -1355,10 +1347,10 @@ fn parse_field_type(token: &TokenWithLocation) -> Result<FieldType, ParseError> 
             "sfixed32" => Ok(FieldType::SFixed32),
             "sfixed64" => Ok(FieldType::SFixed64),
             "bool" => Ok(FieldType::Bool),
-            "string" => Ok(FieldType::String),
             "bytes" => Ok(FieldType::Bytes),
             _ => Ok(FieldType::MessageOrEnum(typ.to_string())),
         },
+        Token::StringType => Ok(FieldType::String),
         _ => Err(ParseError::UnexpectedToken(
             format!("Expected field type, found {:?}", token.token),
             token.location,
@@ -1590,6 +1582,7 @@ mod tests {
     #[test]
     fn test_parse_reserved() {
         let input = r#"
+            syntax = "proto3";
             message TestReserved {
                 reserved 2, 15, 9 to 11;
                 reserved "foo", "bar";
