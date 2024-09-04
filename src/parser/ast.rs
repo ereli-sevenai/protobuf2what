@@ -30,8 +30,10 @@ pub enum Reserved {
 pub enum OptionValue {
     Identifier(String),
     String(String),
-    Int(i64),
+    DecimalInt(i64),
     Float(f64),
+    Octal(i64),
+    Hex(i64),
     Bool(bool),
     List(Vec<OptionValue>),
     Map(Vec<(OptionValue, OptionValue)>),
@@ -81,9 +83,17 @@ pub struct Message {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum NumberValue {
+    DecimalInt(i64),
+    Octal(i64),
+    Hex(i64),
+    Float(f64),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Field {
     pub name: String,
-    pub number: i64,
+    pub number: NumberValue,
     pub label: FieldLabel,
     pub typ: FieldType,
     pub options: Vec<ProtoOption>,
@@ -133,7 +143,7 @@ pub struct Enum {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumValue {
     pub name: String,
-    pub number: i32,
+    pub number: NumberValue,
     pub options: Vec<EnumValueOption>,
 }
 
@@ -146,7 +156,9 @@ pub struct EnumValueOption {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EnumValueOptionValue {
     String(String),
-    Int(i64),
+    DecimalInt(i64),
+    Octal(i64),
+    Hex(i64),
     Float(f64),
     Bool(bool),
     Identifier(String), // For referencing other enum values or custom identifiers
@@ -270,7 +282,7 @@ mod tests {
         let mut message = Message::new("Person".to_string());
         message.fields.push(Field {
             name: "name".to_string(),
-            number: 1,
+            number: NumberValue::DecimalInt(1),
             label: FieldLabel::Optional,
             typ: FieldType::MessageOrEnum(String::new()),
             options: Vec::new(),
@@ -278,7 +290,7 @@ mod tests {
 
         message.fields.push(Field {
             name: "age".to_string(),
-            number: 2,
+            number: NumberValue::DecimalInt(2),
             label: FieldLabel::Optional,
             typ: FieldType::String,
             options: Vec::new(),
@@ -288,17 +300,17 @@ mod tests {
         let mut enum_def = Enum::new("Gender".to_string());
         enum_def.values.push(EnumValue {
             name: "UNKNOWN".to_string(),
-            number: 0,
+            number: NumberValue::DecimalInt(0),
             options: Vec::new(),
         });
         enum_def.values.push(EnumValue {
             name: "MALE".to_string(),
-            number: 1,
+            number: NumberValue::DecimalInt(1),
             options: Vec::new(),
         });
         enum_def.values.push(EnumValue {
             name: "FEMALE".to_string(),
-            number: 2,
+            number: NumberValue::DecimalInt(2),
             options: Vec::new(),
         });
         proto_file.enums.push(enum_def);

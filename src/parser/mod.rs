@@ -12,7 +12,7 @@ use crate::parser::ast::{
     ProtoFile, ProtoOption, Service, Syntax,
 };
 
-use ast::{EnumValueOption, EnumValueOptionValue, FieldType};
+use ast::{EnumValueOption, EnumValueOptionValue, FieldType, NumberValue};
 use error::Location;
 pub use error::{ParseError, ParseResult};
 pub use lexer::{tokenize, Token, TokenWithLocation};
@@ -74,6 +74,7 @@ where
 
     while let Some(current_token) = tokens.peek() {
         match &current_token.token {
+            Token::Syntax => parse_syntax(&mut tokens, &mut proto_file)?,
             Token::Package => parse_package(&mut tokens, &mut proto_file)?,
             Token::Import => parse_import(&mut tokens, &mut proto_file)?,
             Token::Message => {
@@ -113,7 +114,7 @@ where
 {
     while let Some(token) = tokens.peek() {
         match token.token {
-            Token::Comment(_) | Token::Whitespace => {
+            Token::Comment(_) => {
                 tokens.next(); // Consume the token
             }
             _ => break,
@@ -233,12 +234,7 @@ where
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
         .expect(Token::Package)?;
 
-    // Parse package name (which may be a single FullyQualifiedIdentifier or a series of Identifiers separated by dots)
     let package_name = match tokens.next() {
-        Some(TokenWithLocation {
-            token: Token::FullyQualifiedIdentifier(name),
-            ..
-        }) => name.to_string(),
         Some(TokenWithLocation {
             token: Token::Identifier(name),
             ..
@@ -349,7 +345,7 @@ where
         .ok_or(ParseError::UnexpectedEndOfInput(import_token.location))?;
     let path = match path_token.token {
         Token::StringLiteral(path) => path.to_string(),
-        Token::Identifier(path) | Token::FullyQualifiedIdentifier(path) => path.to_string(),
+        // Token::Identifier(path) | Token::FullyQualifiedIdentifier(path) => path.to_string(),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!(
@@ -415,7 +411,7 @@ where
         .next()
         .ok_or(ParseError::UnexpectedEndOfInput(message_token.location))?;
     let name = match &name_token.token {
-        Token::Identifier(s) | Token::FullyQualifiedIdentifier(s) => s.to_string(),
+        Token::Identifier(s) => s.to_string(),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected message name, found {:?}", name_token.token),
@@ -520,17 +516,27 @@ where
 
     skip_comments_and_whitespace(tokens);
 
-    // Parse field type
-    let type_token = tokens
-        .next()
-        .ok_or(ParseError::UnexpectedEndOfInput(start_location))?;
+    let (typ, name) = if let Some(TokenWithLocation {
+        token: Token::Map, ..
+    }) = tokens.peek()
+    {
+        tokens.next(); // Consume 'map'
+        parse_map_field(tokens)?
+    } else {
+        // Parse field type
+        let type_token = tokens
+            .next()
+            .ok_or(ParseError::UnexpectedEndOfInput(start_location))?;
 
-    debug!("Parsing field type: {:?}", type_token);
+        debug!("Parsing field type: {:?}", type_token);
 
-    let typ = parse_field_type(&type_token)?;
+        let typ = parse_field_type(&type_token)?;
 
-    // Parse field name
-    let name = parse_field_name(tokens)?;
+        // Parse field name
+        let name = parse_field_name(tokens)?;
+
+        (typ, name)
+    };
 
     // Expect '=' token
     tokens
@@ -543,7 +549,10 @@ where
         .next()
         .ok_or(ParseError::UnexpectedEndOfInput(start_location))?;
     let number = match number_token.token {
-        Token::IntLiteral(num) => num,
+        Token::DecimalIntLiteral(num) => NumberValue::DecimalInt(num),
+        Token::FloatLiteral(num) => NumberValue::Float(num),
+        Token::HexIntLiteral(num) => NumberValue::Hex(num),
+        Token::OctalIntLiteral(num) => NumberValue::Octal(num),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected field number, found {:?}", number_token.token),
@@ -567,68 +576,6 @@ where
     })
 }
 
-/// Parses a map field from the token stream.
-///
-/// This function is called when a 'map' token is encountered while parsing a field.
-/// It parses the key and value types of the map, the field name, and the field number.
-///
-/// # Arguments
-///
-/// * `tokens` - A mutable reference to a peekable iterator of TokenWithLocation.
-///
-/// # Returns
-///
-/// * `Result<Field, ParseError>` - A Result containing the parsed Field on success,
-///   or a ParseError on failure.
-///
-/// # Errors
-///
-/// Returns a ParseError if:
-/// - Unexpected end of input is encountered
-/// - An unexpected token is found
-/// - The field number is not an integer literal
-fn parse_map_field<'a, I>(tokens: &mut Peekable<I>) -> Result<(FieldType, String), ParseError>
-where
-    I: Iterator<Item = TokenWithLocation<'a>>,
-{
-    // Expect '<'
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
-        .expect(Token::LessThan)?;
-
-    // Parse key type
-    let key_type_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
-    let key_type = parse_field_type(&key_type_token)?;
-
-    // Expect ','
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
-        .expect(Token::Comma)?;
-
-    // Parse value type
-    let value_type_token = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
-    let value_type = parse_field_type(&value_type_token)?;
-
-    // Expect '>'
-    tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
-        .expect(Token::GreaterThan)?;
-
-    // Parse field name
-    let name = parse_field_name(tokens)?;
-
-    Ok((
-        FieldType::Map(Box::new(key_type), Box::new(value_type)),
-        name,
-    ))
-}
 /// Parses a field name from the token stream.
 ///
 /// This function iterates through tokens, building up the field name.
@@ -747,7 +694,7 @@ where
         .next()
         .ok_or(ParseError::UnexpectedEndOfInput(enum_token.location))?;
     let name = match &name_token.token {
-        Token::Identifier(name) | Token::FullyQualifiedIdentifier(name) => name.to_string(),
+        Token::Identifier(name) => name.to_string(),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected enum name, found {:?}", name_token.token),
@@ -775,7 +722,7 @@ where
                 tokens.next(); // Consume closing brace
                 return Ok(enum_def);
             }
-            Token::Identifier(_) | Token::FullyQualifiedIdentifier(_) => {
+            Token::Identifier(_) => {
                 // Parse enum value
                 let value = parse_enum_value(tokens)?;
                 enum_def.values.push(value);
@@ -814,7 +761,7 @@ where
         .next()
         .ok_or(ParseError::UnexpectedEndOfInput(option_token.location))?;
     let name = match &name_token.token {
-        Token::Identifier(s) | Token::FullyQualifiedIdentifier(s) => s.to_string(),
+        Token::Identifier(s) => s.to_string(),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected option name, found {:?}", name_token.token),
@@ -836,7 +783,7 @@ where
     let value = match &value_token.token {
         Token::StringLiteral(s) => EnumValueOptionValue::String(s.to_string()),
         Token::Identifier(s) => EnumValueOptionValue::Identifier(s.to_string()),
-        Token::IntLiteral(i) => EnumValueOptionValue::Int(*i),
+        Token::DecimalIntLiteral(i) => EnumValueOptionValue::DecimalInt(*i),
         Token::FloatLiteral(f) => EnumValueOptionValue::Float(*f),
         _ => {
             return Err(ParseError::UnexpectedToken(
@@ -877,7 +824,7 @@ where
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
     let name = match &name_token.token {
-        Token::Identifier(name) | Token::FullyQualifiedIdentifier(name) => name.to_string(),
+        Token::Identifier(name) => name.to_string(),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected enum value name, found {:?}", name_token.token),
@@ -902,7 +849,10 @@ where
         .next()
         .ok_or(ParseError::UnexpectedEndOfInput(equals_token.location))?;
     let number = match &number_token.token {
-        Token::IntLiteral(num) => *num,
+        Token::DecimalIntLiteral(num) => NumberValue::DecimalInt(*num),
+        Token::FloatLiteral(num) => NumberValue::Float(*num),
+        Token::OctalIntLiteral(num) => NumberValue::Octal(*num),
+        Token::HexIntLiteral(num) => NumberValue::Hex(*num),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected integer, found {:?}", number_token.token),
@@ -961,7 +911,7 @@ where
 
     Ok(EnumValue {
         name,
-        number: number as i32,
+        number,
         options,
     })
 }
@@ -975,7 +925,7 @@ where
         .next()
         .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
     let name = match &name_token.token {
-        Token::Identifier(name) | Token::FullyQualifiedIdentifier(name) => name.to_string(),
+        Token::Identifier(name) => name.to_string(),
         _ => {
             return Err(ParseError::UnexpectedToken(
                 format!("Expected option name, found {:?}", name_token.token),
@@ -1002,7 +952,7 @@ where
     let value = match &value_token.token {
         Token::StringLiteral(s) => EnumValueOptionValue::String(s.to_string()),
         Token::Identifier(s) => EnumValueOptionValue::Identifier(s.to_string()),
-        Token::IntLiteral(i) => EnumValueOptionValue::Int(*i),
+        Token::DecimalIntLiteral(i) => EnumValueOptionValue::DecimalInt(*i),
         Token::FloatLiteral(f) => EnumValueOptionValue::Float(*f),
         _ => {
             return Err(ParseError::UnexpectedToken(
@@ -1200,7 +1150,7 @@ where
                     Token::Option => {
                         parse_option(tokens, &mut options)?;
                     }
-                    Token::Comment(_) | Token::Whitespace => {
+                    Token::Comment(_) => {
                         tokens.next(); // Skip comments and whitespace
                     }
                     _ => {
@@ -1322,7 +1272,9 @@ where
     match &value_token.token {
         Token::StringLiteral(s) => Ok(OptionValue::String(s.to_string())),
         Token::Identifier(s) => Ok(OptionValue::Identifier(s.to_string())),
-        Token::IntLiteral(i) => Ok(OptionValue::Int(*i)),
+        Token::DecimalIntLiteral(num) => Ok(OptionValue::DecimalInt(*num)),
+        Token::OctalIntLiteral(num) => Ok(OptionValue::Octal(*num)),
+        Token::HexIntLiteral(num) => Ok(OptionValue::Hex(*num)),
         Token::FloatLiteral(f) => Ok(OptionValue::Float(*f)),
         _ => Err(ParseError::UnexpectedToken(
             format!("Expected option value, found {:?}", value_token.token),
@@ -1333,7 +1285,7 @@ where
 
 fn parse_field_type(token: &TokenWithLocation) -> Result<FieldType, ParseError> {
     match &token.token {
-        Token::Identifier(typ) | Token::FullyQualifiedIdentifier(typ) => match *typ {
+        Token::Identifier(typ) => match *typ {
             "double" => Ok(FieldType::Double),
             "float" => Ok(FieldType::Float),
             "int32" => Ok(FieldType::Int32),
@@ -1368,7 +1320,6 @@ where
 
     match token.token {
         Token::Identifier(s) => Ok(s.to_string()),
-        Token::FullyQualifiedIdentifier(s) => Ok(s.to_string()),
         _ => Err(ParseError::UnexpectedToken(
             format!("Expected identifier, found {:?}", token.token),
             token.location,
@@ -1397,14 +1348,6 @@ where
                 type_name.push_str(s);
                 first = false;
                 tokens.next(); // Consume the identifier
-            }
-            Some(TokenWithLocation {
-                token: Token::FullyQualifiedIdentifier(s),
-                ..
-            }) => {
-                type_name = s.to_string();
-                tokens.next(); // Consume the fully qualified identifier
-                break;
             }
             Some(TokenWithLocation {
                 token: Token::Dot, ..
@@ -1452,6 +1395,69 @@ where
     }
 }
 
+/// Parses a map field from the token stream.
+///
+/// This function is called when a 'map' token is encountered while parsing a field.
+/// It parses the key and value types of the map, the field name, and the field number.
+///
+/// # Arguments
+///
+/// * `tokens` - A mutable reference to a peekable iterator of TokenWithLocation.
+///
+/// # Returns
+///
+/// * `Result<Field, ParseError>` - A Result containing the parsed Field on success,
+///   or a ParseError on failure.
+///
+/// # Errors
+///
+/// Returns a ParseError if:
+/// - Unexpected end of input is encountered
+/// - An unexpected token is found
+/// - The field number is not an integer literal
+fn parse_map_field<'a, I>(tokens: &mut Peekable<I>) -> Result<(FieldType, String), ParseError>
+where
+    I: Iterator<Item = TokenWithLocation<'a>>,
+{
+    // Expect '<'
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::LessThan)?;
+
+    // Parse key type
+    let key_type_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
+    let key_type = parse_field_type(&key_type_token)?;
+
+    // Expect ','
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::Comma)?;
+
+    // Parse value type
+    let value_type_token = tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
+    let value_type = parse_field_type(&value_type_token)?;
+
+    // Expect '>'
+    tokens
+        .next()
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::GreaterThan)?;
+
+    // Parse field name
+    let name = parse_field_name(tokens)?;
+
+    Ok((
+        FieldType::Map(Box::new(key_type), Box::new(value_type)),
+        name,
+    ))
+}
+
 fn parse_reserved<'a, I>(
     tokens: &mut Peekable<I>,
     reserved: &mut Vec<crate::parser::ast::Reserved>,
@@ -1471,7 +1477,7 @@ where
         match tokens.next() {
             Some(token_with_location) => {
                 match token_with_location.token {
-                    Token::IntLiteral(start) => {
+                    Token::DecimalIntLiteral(start) => {
                         let start = start as i32;
                         if let Some(TokenWithLocation {
                             token: Token::To, ..
@@ -1479,7 +1485,7 @@ where
                         {
                             tokens.next(); // Consume 'to' token
                             if let Some(TokenWithLocation {
-                                token: Token::IntLiteral(end),
+                                token: Token::DecimalIntLiteral(end),
                                 ..
                             }) = tokens.next()
                             {
@@ -1521,25 +1527,6 @@ where
         }
     }
     Ok(())
-}
-
-fn parse_constant<'a, I>(tokens: &mut Peekable<I>) -> Result<String, ParseError>
-where
-    I: Iterator<Item = TokenWithLocation<'a>>,
-{
-    let token_with_location = tokens
-        .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
-
-    match token_with_location.token {
-        Token::Identifier(value) | Token::StringLiteral(value) => Ok(value.to_string()),
-        Token::IntLiteral(value) => Ok(value.to_string()),
-        Token::FloatLiteral(value) => Ok(value.to_string()),
-        _ => Err(ParseError::UnexpectedToken(
-            format!("Expected constant, found {:?}", token_with_location.token),
-            token_with_location.location,
-        )),
-    }
 }
 
 #[cfg(test)]
@@ -1671,32 +1658,76 @@ mod tests {
         assert_eq!(test_field_types.fields.len(), 18);
 
         let expected_types = vec![
-            (FieldType::Double, "double_field", 1),
-            (FieldType::Float, "float_field", 2),
-            (FieldType::Int32, "int32_field", 3),
-            (FieldType::Int64, "int64_field", 4),
-            (FieldType::UInt32, "uint32_field", 5),
-            (FieldType::UInt64, "uint64_field", 6),
-            (FieldType::SInt32, "sint32_field", 7),
-            (FieldType::SInt64, "sint64_field", 8),
-            (FieldType::Fixed32, "fixed32_field", 9),
-            (FieldType::Fixed64, "fixed64_field", 10),
-            (FieldType::SFixed32, "sfixed32_field", 11),
-            (FieldType::SFixed64, "sfixed64_field", 12),
-            (FieldType::Bool, "bool_field", 13),
-            (FieldType::String, "string_field", 14),
-            (FieldType::Bytes, "bytes_field", 15),
+            (
+                FieldType::Double,
+                "double_field",
+                NumberValue::DecimalInt(1),
+            ),
+            (FieldType::Float, "float_field", NumberValue::DecimalInt(2)),
+            (FieldType::Int32, "int32_field", NumberValue::DecimalInt(3)),
+            (FieldType::Int64, "int64_field", NumberValue::DecimalInt(4)),
+            (
+                FieldType::UInt32,
+                "uint32_field",
+                NumberValue::DecimalInt(5),
+            ),
+            (
+                FieldType::UInt64,
+                "uint64_field",
+                NumberValue::DecimalInt(6),
+            ),
+            (
+                FieldType::SInt32,
+                "sint32_field",
+                NumberValue::DecimalInt(7),
+            ),
+            (
+                FieldType::SInt64,
+                "sint64_field",
+                NumberValue::DecimalInt(8),
+            ),
+            (
+                FieldType::Fixed32,
+                "fixed32_field",
+                NumberValue::DecimalInt(9),
+            ),
+            (
+                FieldType::Fixed64,
+                "fixed64_field",
+                NumberValue::DecimalInt(10),
+            ),
+            (
+                FieldType::SFixed32,
+                "sfixed32_field",
+                NumberValue::DecimalInt(11),
+            ),
+            (
+                FieldType::SFixed64,
+                "sfixed64_field",
+                NumberValue::DecimalInt(12),
+            ),
+            (FieldType::Bool, "bool_field", NumberValue::DecimalInt(13)),
+            (
+                FieldType::String,
+                "string_field",
+                NumberValue::DecimalInt(14),
+            ),
+            (FieldType::Bytes, "bytes_field", NumberValue::DecimalInt(15)),
             (
                 FieldType::MessageOrEnum("CustomMessage".to_string()),
                 "message_field",
-                16,
+                NumberValue::DecimalInt(16),
             ),
             (
                 FieldType::Map(Box::new(FieldType::String), Box::new(FieldType::Int32)),
                 "map_field",
-                17,
+                NumberValue::DecimalInt(17),
             ),
-            (FieldType::Int32, "repeated_field", 18),
+            (
+                FieldType::Int32,
+                "repeated_field",
+                NumberValue::DecimalInt(18),
+            ),
         ];
 
         for (index, (expected_type, expected_name, expected_number)) in
@@ -1714,7 +1745,7 @@ mod tests {
                 index
             );
             assert_eq!(
-                field.number, *expected_number as i64,
+                field.number, *expected_number,
                 "Field {} has unexpected number",
                 expected_name
             );
@@ -1743,7 +1774,7 @@ mod tests {
         let custom_field = &custom_message.fields[0];
         assert_eq!(custom_field.name, "custom_field");
         assert_eq!(custom_field.typ, FieldType::String);
-        assert_eq!(custom_field.number, 1);
+        assert_eq!(custom_field.number, NumberValue::DecimalInt(1));
         assert_eq!(custom_field.label, FieldLabel::Optional);
     }
 }

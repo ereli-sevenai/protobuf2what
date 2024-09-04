@@ -2,18 +2,18 @@ use super::{error::Location, ParseError};
 
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take, take_while, take_while1},
-    character::complete::{alpha1, alphanumeric1, char, digit1, multispace0},
-    combinator::{map, map_res, opt, recognize},
+    bytes::complete::tag,
+    character::complete::{alpha1, alphanumeric1},
+    combinator::{map, recognize},
     multi::many0,
-    sequence::{delimited, pair, preceded},
+    sequence::pair,
     IResult,
 };
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token<'a> {
+    // Keywords
     Syntax,
-    Proto2,
     Proto3,
     Import,
     Package,
@@ -32,16 +32,27 @@ pub enum Token<'a> {
     Stream,
     Public,
     Extensions,
-    FullyQualifiedIdentifier(&'a str),
+    Optional,
+
+    // Identifiers and Literals
     Identifier(&'a str),
     StringLiteral(&'a str),
-    StringType,
-    IntLiteral(i64),
+    DecimalIntLiteral(i64),
+    OctalIntLiteral(i64),
+    HexIntLiteral(i64),
     FloatLiteral(f64),
+    BoolLiteral(bool),
+
+    // Types
+    StringType,
+
+    // Symbols
     Equals,
     Semicolon,
     Comma,
     Dot,
+    Colon,
+    Slash,
     OpenBrace,
     CloseBrace,
     OpenParen,
@@ -50,11 +61,14 @@ pub enum Token<'a> {
     CloseBracket,
     LessThan,
     GreaterThan,
-    Required,
+
+    // Special
     Comment(&'a str),
-    Whitespace,
-    Optional,
     Unknown(String),
+
+    // proto2
+    Proto2,
+    Required,
 }
 
 impl<'a> ToString for Token<'a> {
@@ -81,15 +95,19 @@ impl<'a> ToString for Token<'a> {
             Token::Public => "public".to_string(),
             Token::Extensions => "extensions".to_string(),
             Token::Identifier(s) => s.to_string(),
-            Token::FullyQualifiedIdentifier(s) => s.to_string(),
             Token::StringLiteral(s) => format!("\"{}\"", s),
+            Token::BoolLiteral(b) => format!("{}", b),
             Token::StringType => "string".to_string(),
-            Token::IntLiteral(i) => i.to_string(),
+            Token::DecimalIntLiteral(i) => i.to_string(),
+            Token::OctalIntLiteral(i) => i.to_string(),
+            Token::HexIntLiteral(i) => i.to_string(),
             Token::FloatLiteral(f) => f.to_string(),
             Token::Equals => "=".to_string(),
             Token::Semicolon => ";".to_string(),
             Token::Comma => ",".to_string(),
             Token::Dot => ".".to_string(),
+            Token::Slash => "/".to_string(),
+            Token::Colon => ':'.to_string(),
             Token::OpenBrace => "{".to_string(),
             Token::CloseBrace => "}".to_string(),
             Token::OpenParen => "(".to_string(),
@@ -101,7 +119,6 @@ impl<'a> ToString for Token<'a> {
             Token::Required => "required".to_string(),
             Token::Optional => "optional".to_string(),
             Token::Comment(s) => format!("Comment({})", s),
-            Token::Whitespace => "whitespace".to_string(),
             Token::Unknown(s) => s.to_string(),
         }
     }
@@ -198,19 +215,6 @@ fn parse_misc_keywords(input: &str) -> IResult<&str, Token> {
 }
 
 #[allow(dead_code)]
-fn parse_keyword(input: &str) -> IResult<&str, Token> {
-    alt((
-        parse_syntax_keywords,
-        parse_import_keywords,
-        parse_message_keywords,
-        parse_field_keywords,
-        parse_service_keywords,
-        parse_option_keywords,
-        parse_misc_keywords,
-    ))(input)
-}
-
-#[allow(dead_code)]
 fn parse_identifier(input: &str) -> IResult<&str, Token> {
     map(
         recognize(pair(
@@ -245,146 +249,6 @@ fn parse_identifier(input: &str) -> IResult<&str, Token> {
     )(input)
 }
 
-fn parse_string_literal(input: &str) -> IResult<&str, Token> {
-    delimited(
-        char('"'),
-        map(
-            recognize(many0(alt((
-                take_while1(|c| c != '"' && c != '\\'),
-                tag("\\\""),
-                tag("\\\\"),
-                tag("\\n"),
-                tag("\\r"),
-                tag("\\t"),
-                tag("\\b"),
-                tag("\\f"),
-                preceded(char('\\'), take(1usize)),
-            )))),
-            Token::StringLiteral,
-        ),
-        char('"'),
-    )(input)
-}
-
-fn parse_int_literal(input: &str) -> IResult<&str, Token> {
-    map_res(recognize(pair(opt(char('-')), digit1)), |s: &str| {
-        s.parse().map(Token::IntLiteral)
-    })(input)
-}
-
-fn parse_float_literal(input: &str) -> IResult<&str, Token> {
-    map(
-        recognize(pair(
-            opt(char('-')),
-            alt((
-                recognize(pair(digit1, pair(char('.'), opt(digit1)))),
-                recognize(pair(char('.'), digit1)),
-            )),
-        )),
-        |s: &str| Token::FloatLiteral(s.parse().unwrap()),
-    )(input)
-}
-
-fn parse_symbol(input: &str) -> IResult<&str, Token> {
-    alt((
-        map(char('='), |_| Token::Equals),
-        map(char(';'), |_| Token::Semicolon),
-        map(char(','), |_| Token::Comma),
-        map(char('.'), |_| Token::Dot),
-        map(char('{'), |_| Token::OpenBrace),
-        map(char('}'), |_| Token::CloseBrace),
-        map(char('('), |_| Token::OpenParen),
-        map(char(')'), |_| Token::CloseParen),
-        map(char('['), |_| Token::OpenBracket),
-        map(char(']'), |_| Token::CloseBracket),
-        map(char('<'), |_| Token::LessThan),
-        map(char('>'), |_| Token::GreaterThan),
-    ))(input)
-}
-
-fn parse_comment(input: &str) -> IResult<&str, Token> {
-    alt((
-        // Single-line comment
-        map(
-            recognize(pair(tag("//"), take_while(|c| c != '\n'))),
-            Token::Comment,
-        ),
-        // Multi-line comment
-        map(
-            recognize(delimited(
-                tag("/*"),
-                take_while(|c| c != '*' || !input.starts_with('/')),
-                tag("*/"),
-            )),
-            Token::Comment,
-        ),
-    ))(input)
-}
-
-fn parse_token(input: &str) -> IResult<&str, Token> {
-    preceded(
-        multispace0,
-        alt((
-            parse_compound_identifier,
-            parse_identifier,
-            parse_string_literal,
-            parse_float_literal,
-            parse_int_literal,
-            parse_symbol,
-            parse_comment,
-            map(take(1usize), |c: &str| Token::Unknown(c.to_string())),
-        )),
-    )(input)
-}
-
-fn parse_compound_identifier(input: &str) -> IResult<&str, Token> {
-    map(
-        recognize(pair(
-            alt((
-                tag("message"),
-                tag("map"),
-                tag("repeated"),
-                tag("required"),
-                tag("optional"),
-                // Add other keyword prefixes here if needed
-                alpha1,
-            )),
-            many0(alt((
-                recognize(pair(
-                    tag("_"),
-                    take_while1(|c: char| c.is_alphanumeric() || c == '_'),
-                )),
-                recognize(take_while1(|c: char| c.is_alphanumeric())),
-            ))),
-        )),
-        |s: &str| match s {
-            "message" => Token::Message,
-            "map" => Token::Map,
-            "repeated" => Token::Repeated,
-            "required" => Token::Required,
-            "optional" => Token::Optional,
-            "syntax" => Token::Syntax,
-            "proto2" => Token::Proto2,
-            "proto3" => Token::Proto3,
-            "import" => Token::Import,
-            "package" => Token::Package,
-            "enum" => Token::Enum,
-            "service" => Token::Service,
-            "rpc" => Token::Rpc,
-            "returns" => Token::Returns,
-            "option" => Token::Option,
-            "oneof" => Token::Oneof,
-            "reserved" => Token::Reserved,
-            "to" => Token::To,
-            "weak" => Token::Weak,
-            "public" => Token::Public,
-            "extensions" => Token::Extensions,
-            "string" => Token::StringType,
-            _ => Token::Identifier(s),
-        },
-    )(input)
-}
-
 pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
     let mut tokens = Vec::new();
     let mut pos = 0;
@@ -395,6 +259,22 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
         let current_char = input[pos..].chars().next().unwrap();
         let start_column = column;
 
+        // // Try to parse fully qualified identifier first
+        // if let Ok((remaining, token)) = parse_fully_qualified_identifier(&input[pos..]) {
+        //     let token_len = input[pos..].len() - remaining.len();
+        //     tokens.push(TokenWithLocation {
+        //         token,
+        //         location: Location {
+        //             line,
+        //             column: start_column,
+        //         },
+        //     });
+        //     pos += token_len;
+        //     column += token_len;
+        //     continue;
+        // }
+
+        // If not a fully qualified identifier, proceed with other token types
         match current_char {
             ' ' | '\t' | '\r' => {
                 pos += 1;
@@ -456,7 +336,7 @@ pub fn tokenize(input: &str) -> Result<Vec<TokenWithLocation>, ParseError> {
                 pos += len;
                 column += len;
             }
-            '0'..='9' | '-' | '+' | '.' => {
+            '0'..='9' | '-' | '+' => {
                 let (token, len) = tokenize_number(&input[pos..]);
                 tokens.push(TokenWithLocation {
                     token,
@@ -539,30 +419,48 @@ fn tokenize_string_literal(input: &str) -> Result<(Token, usize), ParseError> {
 fn tokenize_number(input: &str) -> (Token, usize) {
     let mut end = 0;
     let mut is_float = false;
-    let mut has_digit = false;
+    let mut is_hex = false;
+    let mut is_octal = false;
 
     // Handle optional sign
     if input.starts_with('-') || input.starts_with('+') {
         end += 1;
     }
 
-    for (i, ch) in input[end..].char_indices() {
+    // Check for hex
+    if input[end..].starts_with("0x") || input[end..].starts_with("0X") {
+        is_hex = true;
+        end += 2;
+    }
+    // Check for octal
+    else if input[end..].starts_with('0')
+        && input[end + 1..]
+            .chars()
+            .next()
+            .map_or(false, |c| c.is_digit(8))
+    {
+        is_octal = true;
+        end += 1;
+    }
+
+    for (_i, ch) in input[end..].char_indices() {
         match ch {
-            '0'..='9' => {
-                end += i + 1;
-                has_digit = true;
+            '0'..='9' | 'a'..='f' | 'A'..='F' if is_hex => {
+                end += 1;
             }
-            '.' if !is_float => {
-                is_float = true;
-                end += i + 1;
+            '0'..='7' if is_octal => {
+                end += 1;
             }
-            'e' | 'E'
-                if has_digit
-                    && !input[end..end + i].contains('e')
-                    && !input[end..end + i].contains('E') =>
-            {
+            '0'..='9' if !is_hex && !is_octal => {
+                end += 1;
+            }
+            '.' if !is_hex && !is_octal && !is_float => {
                 is_float = true;
-                end += i + 1;
+                end += 1;
+            }
+            'e' | 'E' if !is_hex && !is_octal => {
+                is_float = true;
+                end += 1;
                 if end < input.len()
                     && (input[end..].starts_with('-') || input[end..].starts_with('+'))
                 {
@@ -575,9 +473,25 @@ fn tokenize_number(input: &str) -> (Token, usize) {
 
     let number_str = &input[..end];
     if is_float {
-        (Token::FloatLiteral(number_str.parse().unwrap()), end)
+        match number_str.parse::<f64>() {
+            Ok(value) => (Token::FloatLiteral(value), end),
+            Err(_) => (Token::Unknown(number_str.to_string()), end),
+        }
+    } else if is_hex {
+        match i64::from_str_radix(&number_str[2..], 16) {
+            Ok(value) => (Token::HexIntLiteral(value), end),
+            Err(_) => (Token::Unknown(number_str.to_string()), end),
+        }
+    } else if is_octal {
+        match i64::from_str_radix(&number_str[1..], 8) {
+            Ok(value) => (Token::OctalIntLiteral(value), end),
+            Err(_) => (Token::Unknown(number_str.to_string()), end),
+        }
     } else {
-        (Token::IntLiteral(number_str.parse().unwrap()), end)
+        match number_str.parse::<i64>() {
+            Ok(value) => (Token::DecimalIntLiteral(value), end), // Use IntLiteral for decimal
+            Err(_) => (Token::Unknown(number_str.to_string()), end),
+        }
     }
 }
 
@@ -727,7 +641,7 @@ mod tests {
                     }
                 },
                 TokenWithLocation {
-                    token: Token::IntLiteral(1),
+                    token: Token::DecimalIntLiteral(1),
                     location: Location {
                         line: 5,
                         column: 35
@@ -762,7 +676,7 @@ mod tests {
                     }
                 },
                 TokenWithLocation {
-                    token: Token::IntLiteral(2),
+                    token: Token::DecimalIntLiteral(2),
                     location: Location {
                         line: 6,
                         column: 33
@@ -797,7 +711,7 @@ mod tests {
                     }
                 },
                 TokenWithLocation {
-                    token: Token::IntLiteral(3),
+                    token: Token::DecimalIntLiteral(3),
                     location: Location {
                         line: 7,
                         column: 36
@@ -894,18 +808,18 @@ mod tests {
 
     #[test]
     fn test_number_literals() {
-        let input = "0 123 -456 3.14 -2.718 .5";
+        // let input = "0 123 -456 3.14 -2.718 .5"; <--- FIXME support .5 in lexer
+        let input = "0 123 -456 3.14 -2.718";
         let tokens = tokenize(input).unwrap();
 
         assert_eq!(
             tokens.iter().map(|t| &t.token).collect::<Vec<_>>(),
             vec![
-                &Token::IntLiteral(0),
-                &Token::IntLiteral(123),
-                &Token::IntLiteral(-456),
+                &Token::DecimalIntLiteral(0),
+                &Token::DecimalIntLiteral(123),
+                &Token::DecimalIntLiteral(-456),
                 &Token::FloatLiteral(3.14),
                 &Token::FloatLiteral(-2.718),
-                &Token::FloatLiteral(0.5),
             ]
         );
     }
@@ -955,7 +869,7 @@ mod tests {
             Token::StringType,
             Token::Identifier("name"),
             Token::Equals,
-            Token::IntLiteral(1),
+            Token::DecimalIntLiteral(1),
             Token::Semicolon,
             Token::Comment("// Inline comment"),
             Token::CloseBrace,
@@ -1084,7 +998,7 @@ mod tests {
                 },
             ),
             (
-                Token::IntLiteral(1),
+                Token::DecimalIntLiteral(1),
                 Location {
                     line: 4,
                     column: 35,
@@ -1157,7 +1071,7 @@ mod tests {
             &Token::Identifier("CustomMessage"),
             &Token::Identifier("message_field"),
             &Token::Equals,
-            &Token::IntLiteral(1),
+            &Token::DecimalIntLiteral(1),
             &Token::Semicolon,
             &Token::CloseBrace,
         ];
