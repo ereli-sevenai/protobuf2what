@@ -9,6 +9,8 @@ use std::fmt;
 
 pub mod parser;
 pub mod visitor;
+pub mod zod;
+pub mod buf;
 
 /// Errors that can occur during the conversion process
 #[derive(Debug)]
