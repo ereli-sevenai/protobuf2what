@@ -5,7 +5,7 @@ use protobuf_to_zod::zod::{
     ZodGenerator, ZodGeneratorConfig, TypeScriptWriter,
     parser::ZodAnnotationParser,
 };
-use protobuf_to_zod::buf;
+use protobuf_to_zod::buf::{self, is_plugin_mode, run_plugin, process_known_files};
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -16,8 +16,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
     
     // Check if running as a Buf plugin
-    if buf::is_plugin_mode() {
-        return buf::run_plugin().map_err(|e| e.into());
+    if is_plugin_mode() {
+        // First try to use the standard protocol
+        match run_plugin() {
+            Ok(_) => {
+                info!("Plugin execution completed via protocol");
+                return Ok(());
+            },
+            Err(e) => {
+                error!("Plugin protocol execution failed: {}", e);
+                info!("Falling back to processing known files");
+                // When plugin protocol fails, try processing known files
+                return process_known_files().map_err(|e| e.into());
+            }
+        };
+    } else if env::args().len() <= 1 && std::env::var("BUF_PLUGIN_DIRECT").is_ok() {
+        // Special case for direct plugin invocation with environment variable
+        // This allows running the plugin directly without stdin input
+        info!("Direct plugin mode detected via BUF_PLUGIN_DIRECT environment variable");
+        return process_known_files().map_err(|e| e.into());
     }
     
     // Parse command line arguments

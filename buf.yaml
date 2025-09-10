@@ -1,0 +1,26 @@
+version: v1
+name: github.com/user/protobuf2what
+deps:
+  - buf.build/googleapis/googleapis
+breaking:
+  use:
+    - FILE
+lint:
+  use:
+    - DEFAULT
+  ignore:
+    - google
+  except:
+    - ENUM_NO_ALLOW_ALIAS
+    - FIELD_NO_DESCRIPTOR
+    - FILE_NO_PACKAGE
+    - IMPORT_NO_PUBLIC
+    - IMPORT_NO_WEAK
+    - PACKAGE_DIRECTORY_MATCH
+    - PACKAGE_SAME_DIRECTORY
+    - PACKAGE_VERSION_SUFFIX
+    - SERVICE_SUFFIX
+build:
+  excludes:
+    - third-party
+    - google

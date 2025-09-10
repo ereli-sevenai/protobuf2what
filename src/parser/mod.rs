@@ -314,44 +314,52 @@ fn parse_import<'a, I>(
 where
     I: Iterator<Item = TokenWithLocation<'a>>,
 {
+    debug!("Parsing import statement");
+    // Consume 'import' token
     let import_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
-    if import_token.token != Token::Import {
-        return Err(ParseError::UnexpectedToken(
-            format!("Expected 'import', found {:?}", import_token.token),
-            import_token.location,
-        ));
-    }
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::Import)?;
+
+    // Skip whitespace and comments
+    skip_comments_and_whitespace(tokens);
 
     let mut kind = ImportKind::Default;
-    let next_token = tokens
-        .peek()
-        .ok_or(ParseError::UnexpectedEndOfInput(import_token.location))?;
-
-    match next_token.token {
-        Token::Public => {
-            tokens.next(); // Consume 'public' token
-            kind = ImportKind::Public;
+    
+    // Check for 'public' or 'weak' modifiers
+    if let Some(token) = tokens.peek() {
+        match token.token {
+            Token::Public => {
+                tokens.next(); // Consume 'public' token
+                kind = ImportKind::Public;
+                // Skip whitespace and comments after modifier
+                skip_comments_and_whitespace(tokens);
+            }
+            Token::Weak => {
+                tokens.next(); // Consume 'weak' token
+                kind = ImportKind::Weak;
+                // Skip whitespace and comments after modifier
+                skip_comments_and_whitespace(tokens);
+            }
+            _ => {} // Default import, no modifier
         }
-        Token::Weak => {
-            tokens.next(); // Consume 'weak' token
-            kind = ImportKind::Weak;
-        }
-        _ => {} // Default import, no modifier
     }
 
     // Parse import path
     let path_token = tokens
         .next()
         .ok_or(ParseError::UnexpectedEndOfInput(import_token.location))?;
+    
     let path = match path_token.token {
-        Token::StringLiteral(path) => path.to_string(),
-        // Token::Identifier(path) | Token::FullyQualifiedIdentifier(path) => path.to_string(),
+        Token::StringLiteral(path) => {
+            debug!("Found import path: {}", path);
+            path.to_string()
+        },
         _ => {
+            debug!("Expected string literal for import path, found {:?}", path_token.token);
             return Err(ParseError::UnexpectedToken(
                 format!(
-                    "Expected string literal or identifier for import path, found {:?}",
+                    "Expected string literal for import path, found {:?}",
                     path_token.token
                 ),
                 path_token.location,
@@ -359,18 +367,25 @@ where
         }
     };
 
+    // Skip whitespace and comments after path
+    skip_comments_and_whitespace(tokens);
+
     // Expect semicolon
     let semicolon_token = tokens
         .next()
         .ok_or(ParseError::UnexpectedEndOfInput(path_token.location))?;
+    
     if semicolon_token.token != Token::Semicolon {
+        debug!("Expected ';', found {:?}", semicolon_token.token);
         return Err(ParseError::UnexpectedToken(
             format!("Expected ';', found {:?}", semicolon_token.token),
             semicolon_token.location,
         ));
     }
 
-    // Add the import to the proto file
+    // Add the import to the proto file without validating file existence
+    // In a parser, we don't care if the imported file exists, just that the syntax is correct
+    debug!("Adding import: {} with kind {:?}", &path, &kind);
     proto_file.imports.push(Import { path, kind });
 
     Ok(())

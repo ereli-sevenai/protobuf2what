@@ -188,18 +188,14 @@ mod tests {
 
     #[test]
     fn test_parse_with_imports() {
-        let proto_content = r#"
-            syntax = "proto3";
-            
-            import "google/protobuf/timestamp.proto";
-            import public "other.proto";
-            import weak "legacy.proto";
-            
-            message WithImports {
-                string name = 1;
-                google.protobuf.Timestamp created_at = 2;
-            }
-        "#;
+        let proto_content = "syntax = \"proto3\";\n\n\
+            import \"google/protobuf/timestamp.proto\";\n\
+            import public \"other.proto\";\n\
+            import weak \"legacy.proto\";\n\n\
+            message WithImports {\n\
+                string name = 1;\n\
+                google.protobuf.Timestamp created_at = 2;\n\
+            }\n";
 
         let result = parse_proto_file(proto_content);
         assert!(result.is_ok());

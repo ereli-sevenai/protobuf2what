@@ -19,7 +19,8 @@ option java_outer_classname = "LogdServiceOuterFile";
 // best practices to include version number in package
 package logd.v1;
 
-import "third-party/java/remote-apis/google/rpc/status.proto";
+// Import temporarily commented out for testing
+// import "google/rpc/status.proto";
 
 // Request message for [LogdService.CreateLogFile] to request a log file be created
 // in file-system and/or storage
@@ -77,5 +78,6 @@ service LogdService {
      //
      // After the client finishes sending logs, it should call onCompleted() on the returned
      // StreamObserver to signal logD to close the corresponding writer stream to log file.
-    rpc OpenLog(stream LogMessage) returns (google.rpc.Status) {}
+    // Temporarily changed return type for testing
+    rpc OpenLog(stream LogMessage) returns (LogMessage) {}
 }
