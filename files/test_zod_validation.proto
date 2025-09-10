@@ -1,0 +1,52 @@
+syntax = "proto3"; // @zod-version: 1.0
+
+package test;
+
+// User message with Zod validations
+message User // @zod { description: "User account information" }
+{
+  // Username with min/max length
+  string username = 1; // @zod { min: 3, max: 50, description: "Username for login" }
+  
+  // Email with validation
+  string email = 2; // @zod { email: true, description: "User's email address" }
+  
+  // Password with regex validation
+  string password = 3; // @zod { regex: "^(?=.*[A-Za-z])(?=.*\\d)[A-Za-z\\d]{8,}$", description: "User's password" }
+  
+  // Age with range validation
+  int32 age = 4; // @zod { min: 13, max: 120, description: "User's age in years" }
+  
+  // Optional website field
+  string website = 5; // @zod { url: true, optional: true, description: "User's website" }
+  
+  // Tags array with constraints
+  repeated string tags = 6; // @zod { array: { min: 1, max: 10 }, description: "User's tags" }
+  
+  // Type field with default value
+  UserType type = 7; // @zod { description: "User type", default: "STANDARD" }
+  
+  // Nested address with validations
+  Address address = 8; // @zod { description: "User's address" }
+  
+  // Profile picture as base64
+  bytes profile_picture = 9; // @zod { description: "User's profile picture (base64)" }
+}
+
+// Address message with Zod validations
+message Address // @zod { description: "Physical address information" }
+{
+  string street = 1; // @zod { min: 1, description: "Street address" }
+  string city = 2; // @zod { min: 1, description: "City name" }
+  string state = 3; // @zod { min: 2, max: 2, description: "State code (2 letters)" }
+  string country = 4; // @zod { min: 2, description: "Country name" }
+  string zip_code = 5; // @zod { regex: "^\\d{5}(-\\d{4})?$", description: "ZIP code" }
+}
+
+// UserType enum with Zod description
+enum UserType // @zod { description: "Types of users in the system" }
+{
+  STANDARD = 0;
+  PREMIUM = 1;
+  ADMIN = 2;
+}

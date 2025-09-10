@@ -77,6 +77,7 @@ where
             Token::Syntax => parse_syntax(&mut tokens, &mut proto_file)?,
             Token::Package => parse_package(&mut tokens, &mut proto_file)?,
             Token::Import => parse_import(&mut tokens, &mut proto_file)?,
+            Token::Option => parse_option(&mut tokens, &mut proto_file.options)?,
             Token::Message => {
                 let message = parse_message(&mut tokens)?;
                 proto_file.messages.push(message);
@@ -90,7 +91,8 @@ where
                 proto_file.services.push(service);
             }
             Token::Comment(_) => {
-                tokens.next(); // Skip comments
+                // Skip comments, but don't error on them
+                tokens.next();
             }
             _ => {
                 let loc = current_token.location;
@@ -312,44 +314,52 @@ fn parse_import<'a, I>(
 where
     I: Iterator<Item = TokenWithLocation<'a>>,
 {
+    debug!("Parsing import statement");
+    // Consume 'import' token
     let import_token = tokens
         .next()
-        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?;
-    if import_token.token != Token::Import {
-        return Err(ParseError::UnexpectedToken(
-            format!("Expected 'import', found {:?}", import_token.token),
-            import_token.location,
-        ));
-    }
+        .ok_or_else(|| ParseError::UnexpectedEndOfInput(Location::new(0, 0)))?
+        .expect(Token::Import)?;
+
+    // Skip whitespace and comments
+    skip_comments_and_whitespace(tokens);
 
     let mut kind = ImportKind::Default;
-    let next_token = tokens
-        .peek()
-        .ok_or(ParseError::UnexpectedEndOfInput(import_token.location))?;
-
-    match next_token.token {
-        Token::Public => {
-            tokens.next(); // Consume 'public' token
-            kind = ImportKind::Public;
+    
+    // Check for 'public' or 'weak' modifiers
+    if let Some(token) = tokens.peek() {
+        match token.token {
+            Token::Public => {
+                tokens.next(); // Consume 'public' token
+                kind = ImportKind::Public;
+                // Skip whitespace and comments after modifier
+                skip_comments_and_whitespace(tokens);
+            }
+            Token::Weak => {
+                tokens.next(); // Consume 'weak' token
+                kind = ImportKind::Weak;
+                // Skip whitespace and comments after modifier
+                skip_comments_and_whitespace(tokens);
+            }
+            _ => {} // Default import, no modifier
         }
-        Token::Weak => {
-            tokens.next(); // Consume 'weak' token
-            kind = ImportKind::Weak;
-        }
-        _ => {} // Default import, no modifier
     }
 
     // Parse import path
     let path_token = tokens
         .next()
         .ok_or(ParseError::UnexpectedEndOfInput(import_token.location))?;
+    
     let path = match path_token.token {
-        Token::StringLiteral(path) => path.to_string(),
-        // Token::Identifier(path) | Token::FullyQualifiedIdentifier(path) => path.to_string(),
+        Token::StringLiteral(path) => {
+            debug!("Found import path: {}", path);
+            path.to_string()
+        },
         _ => {
+            debug!("Expected string literal for import path, found {:?}", path_token.token);
             return Err(ParseError::UnexpectedToken(
                 format!(
-                    "Expected string literal or identifier for import path, found {:?}",
+                    "Expected string literal for import path, found {:?}",
                     path_token.token
                 ),
                 path_token.location,
@@ -357,18 +367,25 @@ where
         }
     };
 
+    // Skip whitespace and comments after path
+    skip_comments_and_whitespace(tokens);
+
     // Expect semicolon
     let semicolon_token = tokens
         .next()
         .ok_or(ParseError::UnexpectedEndOfInput(path_token.location))?;
+    
     if semicolon_token.token != Token::Semicolon {
+        debug!("Expected ';', found {:?}", semicolon_token.token);
         return Err(ParseError::UnexpectedToken(
             format!("Expected ';', found {:?}", semicolon_token.token),
             semicolon_token.location,
         ));
     }
 
-    // Add the import to the proto file
+    // Add the import to the proto file without validating file existence
+    // In a parser, we don't care if the imported file exists, just that the syntax is correct
+    debug!("Adding import: {} with kind {:?}", &path, &kind);
     proto_file.imports.push(Import { path, kind });
 
     Ok(())
@@ -420,6 +437,15 @@ where
         }
     };
 
+    // Skip any comments that might be after the message name
+    while let Some(TokenWithLocation {
+        token: Token::Comment(_),
+        ..
+    }) = tokens.peek()
+    {
+        tokens.next(); // Skip comment tokens
+    }
+    
     // Expect opening brace
     let open_brace_token = tokens
         .next()
@@ -703,6 +729,15 @@ where
         }
     };
 
+    // Skip any comments that might be after the enum name
+    while let Some(TokenWithLocation {
+        token: Token::Comment(_),
+        ..
+    }) = tokens.peek()
+    {
+        tokens.next(); // Skip comment tokens
+    }
+    
     // Expect opening brace
     let open_brace_token = tokens
         .next()
@@ -730,6 +765,10 @@ where
             Token::Option => {
                 let option = parse_enum_option(tokens)?;
                 enum_def.options.push(option);
+            }
+            Token::Comment(_) => {
+                // Skip comments between enum values
+                tokens.next();
             }
             _ => {
                 return Err(ParseError::UnexpectedToken(
@@ -870,9 +909,11 @@ where
     {
         tokens.next(); // Consume '['
         loop {
+            skip_comments_and_whitespace(tokens);
             let option = parse_enum_value_option(tokens)?;
             options.push(option);
 
+            skip_comments_and_whitespace(tokens);
             match tokens.peek() {
                 Some(TokenWithLocation {
                     token: Token::Comma,
@@ -887,6 +928,12 @@ where
                     tokens.next(); // Consume closing bracket
                     break;
                 }
+                Some(TokenWithLocation {
+                    token: Token::Comment(_),
+                    ..
+                }) => {
+                    tokens.next(); // Skip comment
+                }
                 Some(t) => {
                     return Err(ParseError::UnexpectedToken(
                         format!("Expected ',' or ']', found {:?}", t.token),
@@ -898,15 +945,32 @@ where
         }
     }
 
-    // Expect semicolon
-    let semicolon_token = tokens
-        .next()
-        .ok_or(ParseError::UnexpectedEndOfInput(number_token.location))?;
-    if semicolon_token.token != Token::Semicolon {
-        return Err(ParseError::UnexpectedToken(
-            format!("Expected ';', found {:?}", semicolon_token.token),
-            semicolon_token.location,
-        ));
+    // Handle any comments that might appear after the number
+    let mut found_semicolon = false;
+    while let Some(token) = tokens.peek() {
+        match &token.token {
+            Token::Comment(_) => {
+                // Skip comments
+                tokens.next();
+            }
+            Token::Semicolon => {
+                // Found semicolon
+                tokens.next();
+                found_semicolon = true;
+                break;
+            }
+            _ => {
+                // Unexpected token
+                return Err(ParseError::UnexpectedToken(
+                    format!("Expected ';' or comment, found {:?}", token.token),
+                    token.location,
+                ));
+            }
+        }
+    }
+
+    if !found_semicolon {
+        return Err(ParseError::UnexpectedEndOfInput(number_token.location));
     }
 
     Ok(EnumValue {
@@ -1530,7 +1594,10 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+mod tests;
+
+#[cfg(test)]
+mod legacy_tests {
     use super::*;
 
     #[test]

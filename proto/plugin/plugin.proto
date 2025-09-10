@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package plugin;
+
+// Request sent from Buf to a plugin
+message PluginRequest {
+  // List of files to process
+  repeated File files = 1;
+}
+
+// A single file to process
+message File {
+  // The name of the file (e.g. "foo/bar.proto")
+  string name = 1;
+  // The content of the file
+  string content = 2;
+}
+
+// Response sent from a plugin back to Buf
+message PluginResponse {
+  // List of generated files
+  repeated ResponseFile files = 1;
+}
+
+// A single generated file
+message ResponseFile {
+  // The name of the file (e.g. "foo/bar.ts")
+  string name = 1;
+  // The content of the file
+  string content = 2;
+}

@@ -1,0 +1,9 @@
+version: v1
+plugins:
+  - name: protobuf-to-zod
+    path: ./target/debug/protobuf_to_zod
+    out: generated
+    opt: 
+      - import_style=named
+      - typescript=true
+      - single_file=true

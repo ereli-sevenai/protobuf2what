@@ -1,0 +1,99 @@
+syntax = "proto3";
+package test;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/any.proto";
+import "google/protobuf/empty.proto";
+
+// A complex message with various field types and nested messages
+message ComplexMessage {
+  // Basic fields
+  string name = 1;
+  int32 id = 2;
+  
+  // Timestamp field
+  google.protobuf.Timestamp created_at = 3;
+  
+  // Nested message
+  message Address {
+    string street = 1;
+    string city = 2;
+    string state = 3;
+    string country = 4;
+    int32 zip = 5;
+  }
+  
+  // Using the nested message
+  Address address = 4;
+  
+  // Repeated field
+  repeated string tags = 5;
+  
+  // Map field
+  map<string, string> metadata = 6;
+  
+  // Enum field
+  Status status = 7;
+  
+  // Oneof field
+  oneof contact_info {
+    string email = 8;
+    string phone = 9;
+  }
+  
+  // Any field
+  google.protobuf.Any extra_data = 10;
+}
+
+// Enum definition
+enum Status {
+  STATUS_UNKNOWN = 0;
+  STATUS_ACTIVE = 1;
+  STATUS_INACTIVE = 2;
+  STATUS_DELETED = 3 [deprecated = true];
+}
+
+// Service definition
+service TestService {
+  // Simple RPC
+  rpc GetMessage(GetMessageRequest) returns (ComplexMessage);
+  
+  // Server streaming RPC
+  rpc ListMessages(ListMessagesRequest) returns (stream ComplexMessage);
+  
+  // Client streaming RPC
+  rpc CreateMessages(stream ComplexMessage) returns (CreateMessagesResponse);
+  
+  // Bidirectional streaming RPC
+  rpc ChatMessages(stream ChatRequest) returns (stream ChatResponse);
+  
+  // Empty response
+  rpc DeleteMessage(DeleteMessageRequest) returns (google.protobuf.Empty);
+}
+
+// Request messages
+message GetMessageRequest {
+  int32 id = 1;
+}
+
+message ListMessagesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message CreateMessagesResponse {
+  repeated int32 ids = 1;
+}
+
+message ChatRequest {
+  string message = 1;
+}
+
+message ChatResponse {
+  string message = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message DeleteMessageRequest {
+  int32 id = 1;
+}

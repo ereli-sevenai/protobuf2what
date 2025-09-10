@@ -1,0 +1,22 @@
+syntax = "proto3";
+package test;
+
+/**
+ * A basic message with simple fields
+ */
+message BasicMessage {
+  // String field
+  string name = 1;
+  
+  // Integer field
+  int32 id = 2;
+  
+  // Boolean field
+  bool active = 3;
+  
+  // Float field
+  float score = 4;
+  
+  // Bytes field
+  bytes data = 5;
+}
